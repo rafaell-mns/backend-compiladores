@@ -328,7 +328,32 @@ class GeradorCodigo(LinguagemListener):
 # Continue na PARTE 2...
 
 # ============= PARTE 2 - Cole após a PARTE 1 =============
+    # -----------------------------------------------------------
+    # CRIAÇÃO DE OBJETOS (NEW)
+    # -----------------------------------------------------------
+    def exitNewExpression(self, ctx):
+        # Pega o nome da classe. Dependendo da sua gramática, pode ser:
+        # ctx.singleExpression().getText() ou ctx.Identifier().getText()
+        # Vou usar um método seguro que pega o texto do filho apropriado
+        
+        texto = ctx.getText() # Ex: "new Date()"
+        
+        # Extrai o nome da classe (remove o 'new ' e os '()')
+        # Forma simplificada: verificar string contains
+        
+        if "Date" in texto:
+            self.emit("   new java/util/Date\n")
+            self.emit("   dup\n")
+            self.emit("   invokespecial java/util/Date/<init>()V\n")
+            return
 
+        # Exemplo para Arrays via construtor: new Array()
+        if "Array" in texto or "ArrayList" in texto:
+            self.emit("   new java/util/ArrayList\n")
+            self.emit("   dup\n")
+            self.emit("   invokespecial java/util/ArrayList/<init>()V\n")
+            return
+            
     # -----------------------------------------------------------
     # FUNÇÕES
     # -----------------------------------------------------------
@@ -636,6 +661,42 @@ class GeradorCodigo(LinguagemListener):
                             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                             self.emit(f"   astore {info['index']}\n")
                             self.emit(f"   aload {idx_temp_old}\n")
+            
+            if ctx.DOT() or ctx.OPTIONAL_CHAIN():
+                prop_name = ctx.Identifier().getText()
+                is_optional = (ctx.OPTIONAL_CHAIN() is not None)
+            
+            if is_optional:
+                # Lógica do Optional Chaining (?.)
+                # Pilha atual: [Objeto] (Pode ser Map ou null)
+                
+                lbl_is_null = self.get_next_label()
+                lbl_continue = self.get_next_label()
+                
+                self.emit("   dup\n") # Duplica para verificar se é null sem perder o valor
+                self.emit(f"   ifnull {lbl_is_null}\n")
+                
+                # Se não for null, faz o acesso normal
+                self.emit("   checkcast java/util/Map\n")
+                self.emit(f'   ldc "{prop_name}"\n')
+                self.emit("   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2\n")
+                self.emit(f"   goto {lbl_continue}\n")
+                
+                # Se for null/undefined
+                self.emit(f"{lbl_is_null}:\n")
+                self.emit("   pop\n")        # Remove o objeto null da pilha (o duplicado já foi consumido pelo ifnull)
+                self.emit("   aconst_null\n") # Coloca null como resultado final
+                
+                self.emit(f"{lbl_continue}:\n")
+                
+            else:
+                # Acesso normal (.)
+                # Se o objeto for null aqui, o Java vai lançar NullPointerException
+                # (comportamento similar ao JS que lança TypeError)
+                self.emit("   checkcast java/util/Map\n")
+                self.emit(f'   ldc "{prop_name}"\n')
+                self.emit("   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2\n")
+            return
 
     def enterPostfixExpression(self, ctx):
         if ctx.getText().startswith("console.log"):
@@ -654,6 +715,21 @@ class GeradorCodigo(LinguagemListener):
     # PRIMARY EXPRESSIONS (CORRIGIDO)
     # -----------------------------------------------------------
     def enterPrimaryExpression(self, ctx):
+        # --- PARTE NOVA: Instanciação (NEW) ---
+        if ctx.NEW():
+            nome_classe = ctx.Identifier().getText()
+            
+            if nome_classe == "Date":
+                self.emit("   new java/util/Date\n")
+                self.emit("   dup\n")
+            elif nome_classe == "Array" or nome_classe == "ArrayList":
+                self.emit("   new java/util/ArrayList\n")
+                self.emit("   dup\n")
+            
+            # Importante: Retorna aqui para não executar a lógica de variáveis/literais abaixo
+            return 
+        # --------------------------------------
+
         if ctx.Literal():
             val = ctx.Literal().getText()
             
@@ -722,10 +798,98 @@ class GeradorCodigo(LinguagemListener):
                 idx = self.var_map_main[nome]['index']
                 self.emit(f"   aload {idx}\n")
 
+    def exitPrimaryExpression(self, ctx):
+        # Finaliza o NEW chamando o construtor
+        if ctx.NEW():
+            nome_classe = ctx.Identifier().getText()
+            
+            # Verifica se tem argumentos (argList)
+            # Na JVM, a assinatura muda dependendo dos argumentos.
+            # Para simplificar, vamos assumir construtores vazios por enquanto,
+            # ou você terá que contar os argumentos em argList.
+            
+            if nome_classe == "Date":
+                self.emit("   invokespecial java/util/Date/<init>()V\n")
+            elif nome_classe == "Array" or nome_classe == "ArrayList":
+                self.emit("   invokespecial java/util/ArrayList/<init>()V\n")
+
+
     # -----------------------------------------------------------
     # CORREÇÃO: PRÉ-INCREMENTO (++x retorna NOVO valor)
     # -----------------------------------------------------------
     def exitUnaryExpression(self, ctx):
+        # --- IMPLEMENTAÇÃO DO TYPEOF ---
+        if hasattr(ctx, 'TYPEOF') and ctx.TYPEOF():
+            idx_temp = self.next_var_index + 150
+            lbl_num = self.get_next_label()
+            lbl_str = self.get_next_label()
+            lbl_bool = self.get_next_label()
+            lbl_list = self.get_next_label() # Array é object
+            lbl_map = self.get_next_label()  # Object é object
+            lbl_end = self.get_next_label()
+
+            self.emit(f"   astore {idx_temp}\n") # Salva o valor do topo
+
+            # Verifica Number
+            self.emit(f"   aload {idx_temp}\n")
+            self.emit("   instanceof java/lang/Number\n")
+            self.emit(f"   ifne {lbl_num}\n")
+
+            # Verifica String
+            self.emit(f"   aload {idx_temp}\n")
+            self.emit("   instanceof java/lang/String\n")
+            self.emit(f"   ifne {lbl_str}\n")
+
+            # Verifica Boolean (Assumindo Integer 0 ou 1 como bool ou classe Boolean)
+            # Se você usa Integer 0/1 para bool, typeof retornará "number". 
+            # Se usa java/lang/Boolean:
+            self.emit(f"   aload {idx_temp}\n")
+            self.emit("   instanceof java/lang/Boolean\n")
+            self.emit(f"   ifne {lbl_bool}\n")
+
+            # Verifica Objetos (List ou Map)
+            self.emit(f"   aload {idx_temp}\n")
+            self.emit("   instanceof java/util/List\n")
+            self.emit(f"   ifne {lbl_list}\n")
+            self.emit(f"   aload {idx_temp}\n")
+            self.emit("   instanceof java/util/Map\n")
+            self.emit(f"   ifne {lbl_map}\n")
+
+            # Default: undefined (se for null)
+            self.emit('   ldc "undefined"\n')
+            self.emit(f"   goto {lbl_end}\n")
+
+            self.emit(f"{lbl_num}:\n")
+            self.emit('   ldc "number"\n')
+            self.emit(f"   goto {lbl_end}\n")
+
+            self.emit(f"{lbl_str}:\n")
+            self.emit('   ldc "string"\n')
+            self.emit(f"   goto {lbl_end}\n")
+            
+            self.emit(f"{lbl_bool}:\n")
+            self.emit('   ldc "boolean"\n')
+            self.emit(f"   goto {lbl_end}\n")
+
+            self.emit(f"{lbl_list}:\n")
+            self.emit(f"{lbl_map}:\n")
+            self.emit('   ldc "object"\n') # Arrays e Maps são objects em JS
+
+            self.emit(f"{lbl_end}:\n")
+            return
+
+        # --- IMPLEMENTAÇÃO DO DELETE ---
+        # Nota: Delete real em compiladores requer acesso à referência (L-Value).
+        # Esta implementação assume que o comando anterior colocou o MAP e a CHAVE na pilha.
+        # Ex: delete obj["idade"] -> Se o parser tratar isso como uma operação binária, ok.
+        # Se for unário simples, geralmente apenas retorna true sem efeito em implementações simples.
+        if hasattr(ctx, 'DELETE') and ctx.DELETE():
+            # Remove o valor do topo da pilha (fingindo que deletou)
+            self.emit("   pop\n")
+            # Retorna true (delete sempre retorna true em JS, exceto frozen)
+            self.emit("   iconst_1\n")
+            self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
+            return
         if ctx.INC() or ctx.DEC():
             primeiro = ctx.getChild(1)
             if hasattr(primeiro, 'getText'):
@@ -815,6 +979,99 @@ class GeradorCodigo(LinguagemListener):
     # COMPARAÇÕES E OPERADORES
     # -----------------------------------------------------------
     def exitRelationalExpression(self, ctx):
+        # --- IMPLEMENTAÇÃO DO INSTANCEOF ---
+        # --- IMPLEMENTAÇÃO DO INSTANCEOF (CORRIGIDO) ---
+        if hasattr(ctx, 'INSTANCEOF') and ctx.INSTANCEOF():
+            tipo_nome = ctx.getChild(2).getText() # Ex: "Date", "Array" ou uma variável "MinhaClasse"
+            
+            # CORREÇÃO: Só faz POP se o lado direito for uma variável que colocou valor na pilha.
+            # Se for apenas um nome de tipo (como Date, Array), o listener de Identifier não gerou código, 
+            # então não temos nada para remover.
+            is_variavel_local = self.inside_method and tipo_nome in self.var_map_local
+            is_variavel_global = tipo_nome in self.var_map_main
+            
+            if is_variavel_local or is_variavel_global:
+                self.emit("   pop\n") # Remove o valor da variável da pilha, pois instanceof só quer o nome da classe fixo
+            
+            lbl_true = self.get_next_label()
+            lbl_false = self.get_next_label()
+            lbl_end = self.get_next_label()
+            
+            if tipo_nome == 'Array':
+                self.emit("   instanceof java/util/ArrayList\n")
+            elif tipo_nome == 'Object':
+                # Object em JS inclui Objetos (Map), Arrays (List) e Datas (Date)
+                lbl_obj_true = self.get_next_label()
+                lbl_obj_out = self.get_next_label()
+
+                # 1. Verifica se é Map
+                self.emit("   dup\n")
+                self.emit("   instanceof java/util/Map\n")
+                self.emit(f"   ifne {lbl_obj_true}\n")
+
+                # 2. Verifica se é List (Array)
+                self.emit("   dup\n")
+                self.emit("   instanceof java/util/List\n")
+                self.emit(f"   ifne {lbl_obj_true}\n")
+                
+                # 3. Verifica se é Date (o dup anterior é consumido aqui)
+                self.emit("   instanceof java/util/Date\n")
+                # Se for Date, o resultado (1) fica na pilha e vai pro final
+                # Se não for, o resultado (0) fica na pilha e vai pro final
+                self.emit(f"   goto {lbl_obj_out}\n")
+
+                self.emit(f"{lbl_obj_true}:\n")
+                self.emit("   pop\n")     # Remove o objeto duplicado da pilha
+                self.emit("   iconst_1\n") # Coloca TRUE (1) como resultado
+
+                self.emit(f"{lbl_obj_out}:\n")
+            elif tipo_nome == 'Date':
+                # Nota: Seu código precisa suportar 'new Date' para isso funcionar 100%
+                self.emit("   instanceof java/util/Date\n")
+            elif tipo_nome == 'String':
+                self.emit("   instanceof java/lang/String\n")
+            else:
+                self.emit("   instanceof java/lang/Object\n")
+
+            self.emit(f"   ifne {lbl_true}\n")
+            self.emit(f"{lbl_false}:\n")
+            self.emit("   iconst_0\n")
+            self.emit(f"   goto {lbl_end}\n")
+            self.emit(f"{lbl_true}:\n")
+            self.emit("   iconst_1\n")
+            self.emit(f"{lbl_end}:\n")
+            self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
+            return
+
+        # --- IMPLEMENTAÇÃO DO IN ( "prop" in obj ) ---
+        # --- IMPLEMENTAÇÃO DO IN ( "prop" in obj ) ---
+        if hasattr(ctx, 'IN') and ctx.IN():
+            # Pilha esperada: [String "prop", Object obj] (O Map está no topo)
+            
+            # CORREÇÃO: Verificamos se é Map ANTES de fazer o swap
+            self.emit("   checkcast java/util/Map\n") 
+            
+            # Agora sim invertemos para preparar a chamada da função
+            self.emit("   swap\n") # Agora: [Object obj, String "prop"]
+            
+            # Verificamos se a chave é válida (Object)
+            self.emit("   checkcast java/lang/Object\n") 
+            
+            # Chama containsKey(key) -> consome Map e Key (2 itens)
+            self.emit("   invokeinterface java/util/Map/containsKey(Ljava/lang/Object;)Z 2\n")
+            
+            lbl_true = self.get_next_label()
+            lbl_end = self.get_next_label()
+            
+            self.emit(f"   ifne {lbl_true}\n")
+            self.emit("   iconst_0\n")
+            self.emit(f"   goto {lbl_end}\n")
+            self.emit(f"{lbl_true}:\n")
+            self.emit("   iconst_1\n")
+            self.emit(f"{lbl_end}:\n")
+            self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
+            return
+        
         if ctx.LT() or ctx.GT() or ctx.LE() or ctx.GE():
             idx_temp = self.next_var_index + 20
             
