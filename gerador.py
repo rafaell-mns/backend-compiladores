@@ -19,7 +19,6 @@ class GeradorCodigo(LinguagemListener):
         
         # Pilha para controlar IFs aninhados
         self.if_stack = [] 
-        
 
         self.switch_stack = []
 
@@ -29,6 +28,11 @@ class GeradorCodigo(LinguagemListener):
         self.label_counter = 0
         self.em_console_log = False
         self.last_type = 'int'
+        
+        # NOVO: Lista para guardar nomes de funções e impedir que sejam lidas como variáveis
+        self.defined_functions = set()
+        # NOVO: Flag para retorno implícito de Arrow Function
+        self.is_arrow_return = False
 
     def get_codigo(self):
         full_code = f".class public {self.nome_classe}\n"
@@ -347,27 +351,91 @@ class GeradorCodigo(LinguagemListener):
         self.next_var_index = 1
 
     def enterVariableDeclarator(self, ctx):
-        if ctx.expression() and ctx.expression().assignmentExpression():
-            if "function" in ctx.getText() and ctx.ASSIGN():
-                nome_funcao = ctx.Identifier().getText()
-                self.methods_code += f".method public static {nome_funcao}(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n"
-                self.methods_code += "   .limit stack 300\n"
-                self.methods_code += "   .limit locals 300\n"
-                self.inside_method = True
-                self.var_map_local = {} 
+        texto = ctx.getText()
+        
+        # Lógica para ARROW FUNCTION (=>) ou FUNCTION tradicional
+        if "=>" in texto or ("function" in texto and ctx.ASSIGN()):
+            nome_funcao = ctx.Identifier().getText()
+            
+            # --- NOVO: Registra que este nome é uma função ---
+            self.defined_functions.add(nome_funcao)
+            # -------------------------------------------------
+
+            # Cria assinatura do método
+            self.methods_code += f".method public static {nome_funcao}(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n"
+            self.methods_code += "   .limit stack 300\n"
+            self.methods_code += "   .limit locals 300\n"
+            self.inside_method = True
+            self.var_map_local = {} 
+            
+            # --- Extração de Parâmetros da Arrow Function ---
+            if "=>" in texto:
+                # Pega o que está antes da seta
+                parte_params = texto.split("=>")[0]
+                # Remove o nome da variável e o igual
+                parte_params = parte_params.split("=")[1].strip()
+                
+                # Remove parênteses se houver
+                parte_params = parte_params.replace("(", "").replace(")", "")
+                
+                idx = 0
+                if parte_params:
+                    params = parte_params.split(",")
+                    for p in params:
+                        p_nome = p.strip()
+                        if p_nome:
+                            self.var_map_local[p_nome] = {'index': idx}
+                            idx += 1
+                self.next_var_index = idx
+
+                # Verifica se é retorno direto (sem chaves)
+                parte_corpo = texto.split("=>")[1].strip()
+                if not parte_corpo.startswith("{"):
+                    self.is_arrow_return = True
+                else:
+                    self.is_arrow_return = False
+            else:
                 self.next_var_index = 0 
+                self.is_arrow_return = False
 
     def exitVariableDeclarator(self, ctx):
+        # Se estávamos dentro de um método (Arrow ou Function)
         if self.inside_method:
-            self.emit("   aconst_null\n")
-            self.emit("   areturn\n")
+            
+            if self.is_arrow_return:
+                # Se for arrow function curta (=> a+b), o valor já está na pilha.
+                # Apenas retornamos ele.
+                self.emit("   areturn\n")
+                self.is_arrow_return = False
+            else:
+                # Se for bloco normal, garante retorno nulo caso falte return explícito
+                self.emit("   aconst_null\n")
+                self.emit("   areturn\n")
             
             self.methods_code += ".end method\n\n"
             self.inside_method = False
             self.next_var_index = 1
-        else:
+            
+            # TRUQUE PARA EVITAR VERIFY ERROR NO MAIN:
+            # Como transformamos a variável em um método estático,
+            # ela tecnicamente "não existe" como variável local no main.
+            # Mas o 'VariableDeclarator' espera um valor para o 'astore'.
+            # Se não fizermos nada, o código do main fica quebrado.
+            # Vamos apenas colocar um null e salvar na variável do main para satisfazer a JVM.
             nome = ctx.Identifier().getText()
-            if "function" not in ctx.getText():
+            if nome not in self.var_map_main:
+                self.var_map_main[nome] = {'index': self.next_var_index}
+                self.next_var_index += 1
+            info = self.var_map_main[nome]
+            
+            # Adiciona ao MAIN CODE, não ao methods_code
+            self.main_code += "   aconst_null\n"
+            self.main_code += f"   astore {info['index']}\n"
+
+        else:
+            # Lógica para variáveis normais (int a = 10;)
+            nome = ctx.Identifier().getText()
+            if "function" not in ctx.getText() and "=>" not in ctx.getText():
                 if nome not in self.var_map_main:
                     self.var_map_main[nome] = {'index': self.next_var_index}
                     self.next_var_index += 1
@@ -582,6 +650,9 @@ class GeradorCodigo(LinguagemListener):
     # -----------------------------------------------------------
     # PRIMARY EXPRESSIONS
     # -----------------------------------------------------------
+    # -----------------------------------------------------------
+    # PRIMARY EXPRESSIONS (CORRIGIDO)
+    # -----------------------------------------------------------
     def enterPrimaryExpression(self, ctx):
         if ctx.Literal():
             val = ctx.Literal().getText()
@@ -609,7 +680,6 @@ class GeradorCodigo(LinguagemListener):
                 return
             
             else:
-                # CORREÇÃO: Decimais como string para precisão
                 if '.' in val:
                     self.emit(f'   ldc "{val}"\n')
                     return
@@ -637,7 +707,14 @@ class GeradorCodigo(LinguagemListener):
             nome = ctx.Identifier().getText()
             if nome in ['console', 'Math']:
                 return
-            
+
+            # --- CORREÇÃO DEFINITIVA ---
+            # Se o nome for de uma função definida por nós (estática),
+            # NÃO carregue ela na pilha. O invokestatic cuidará disso.
+            if nome in self.defined_functions:
+                return
+            # ---------------------------
+
             if self.inside_method and nome in self.var_map_local:
                 idx = self.var_map_local[nome]['index']
                 self.emit(f"   aload {idx}\n")

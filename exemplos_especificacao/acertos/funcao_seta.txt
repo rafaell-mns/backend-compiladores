@@ -4,3 +4,7 @@ const multiplicar = (a, b) => {
 
 // Forma ainda mais curta para retornos diretos
 const dividir = (a, b) => a / b;
+
+console.log(multiplicar(6, 7)); 
+
+console.log(dividir(20, 4));
