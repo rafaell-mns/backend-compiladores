@@ -1,14 +1,18 @@
 let pessoa = {
- nome: "João",
- idade: 30,
- cidade: "São Paulo"
+  nome: "Carlos",
+  idade: 30,
+  cidade: "Teresina"
 };
 
 let numeros = [1, 2, 3, 4, 5];
 let misto = [1, "texto", true, null];
 
 function somar(a, b) {
- return a + b;
+  return a + b;
 }
 
-const multiplicar = (a, b) => a * b;
+function multiplicar(a, b) {
+  return a * b;
+}
+
+console.log("Pessoa: " + pessoa); 

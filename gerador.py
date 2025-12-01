@@ -27,8 +27,6 @@ class GeradorCodigo(LinguagemListener):
         self.em_console_log = False
         self.last_type = 'int'
 
-        
-
     def get_codigo(self):
         full_code = f".class public {self.nome_classe}\n"
         full_code += ".super java/lang/Object\n\n"
@@ -42,8 +40,8 @@ class GeradorCodigo(LinguagemListener):
         full_code += self.methods_code
 
         full_code += ".method public static main([Ljava/lang/String;)V\n"
-        full_code += "   .limit stack 100\n"
-        full_code += "   .limit locals 100\n"
+        full_code += "   .limit stack 300\n"
+        full_code += "   .limit locals 300\n"
         full_code += self.main_code
         full_code += "   return\n"
         full_code += ".end method\n"
@@ -84,10 +82,6 @@ class GeradorCodigo(LinguagemListener):
     def exitIfStatement(self, ctx):
         config = self.if_stack.pop()
         self.emit(f"{config['lbl_end']}:\n")
-
-    # Precisamos interceptar o fim da expressão e do statement "true"
-    # A melhor forma é usar o listener genérico de statement e expression
-    # que já temos, adicionando a verificação da pilha do IF.
 
     # -----------------------------------------------------------
     # LÓGICA DO FOR (MANTIDA)
@@ -180,19 +174,15 @@ class GeradorCodigo(LinguagemListener):
         return any(op in texto for op in boolean_ops)
 
     def exitStatement(self, ctx):
-    # Verificamos se acabamos de sair do bloco "TRUE" de um IF.
-        if self.if_stack:
-            config = self.if_stack[-1]
-            if id(ctx) == config['stmt_true_id']:
-                self.emit(f"   goto {config['lbl_end']}\n")
-                self.emit(f"{config['lbl_else']}:\n")
-                
+        # ... (código do IF e console.log que você já tem) ...
         # Lógica do console.log
         if self.em_console_log and ctx.getText().startswith("console.log"):
-            # Só converte se for uma expressão booleana
+            # Lidar com múltiplos argumentos no console.log é complexo no Jasmin simples.
+            # O ideal é imprimir apenas o topo ou concatenar. 
+            # Sua lógica atual imprime um e retorna. Certifique-se de que consome tudo da pilha.
+            # Para este exercício, assumiremos que seu console.log atual funciona para 1 argumento.
             if hasattr(ctx, 'expression') and ctx.expression():
                 expr = ctx.expression()
-                # Detecta se é resultado de comparação/lógica
                 if self.is_boolean_expression(expr):
                     self.convert_boolean_to_string()
             
@@ -201,9 +191,22 @@ class GeradorCodigo(LinguagemListener):
             return
         
         if ctx.expression() and ctx.SEMI():
-            texto = ctx.getText()
-            # CORREÇÃO: Não aplica pop se estiver capturando incremento do for
-            if 'console.log' not in texto and not self.capturing_increment:
+            # VERIFICAÇÃO CRÍTICA:
+            # Se for uma atribuição (ex: x = 10), o exitAssignmentExpression já fez 'astore'.
+            # A pilha está vazia. Não devemos dar POP.
+            is_assignment = False
+            expr = ctx.expression()
+            # Navega na árvore para ver se tem operador de atribuição
+            if expr.assignmentExpression() and expr.assignmentExpression().assignmentOperator():
+                is_assignment = True
+            
+            # Verifica outras condições
+            texto_expr = expr.getText()
+            starts_compound = texto_expr.startswith('{') or texto_expr.startswith('[') or texto_expr.startswith('function')
+            is_call = texto_expr.endswith(')') and ('=' not in texto_expr)
+            
+            # Só dá POP se NÃO for atribuição
+            if 'console.log' not in ctx.getText() and not self.capturing_increment and (not starts_compound) and (not is_call) and (not is_assignment):
                 self.emit("   pop\n")
 
     def convert_boolean_to_string(self):
@@ -346,9 +349,6 @@ class GeradorCodigo(LinguagemListener):
             # Concatena
             self.emit("   invokevirtual java/lang/String/concat(Ljava/lang/String;)Ljava/lang/String;\n")
 
-
-
-
     # -----------------------------------------------------------
     # FUNÇÕES
     # -----------------------------------------------------------
@@ -356,8 +356,8 @@ class GeradorCodigo(LinguagemListener):
         if ctx.Identifier():
             nome_funcao = ctx.Identifier().getText()
             self.methods_code += f".method public static {nome_funcao}(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n"
-            self.methods_code += "   .limit stack 100\n"
-            self.methods_code += "   .limit locals 100\n"
+            self.methods_code += "   .limit stack 300\n"
+            self.methods_code += "   .limit locals 300\n"
             self.inside_method = True
             self.var_map_local = {} 
             self.next_var_index = 0 
@@ -376,8 +376,8 @@ class GeradorCodigo(LinguagemListener):
             if "function" in ctx.getText() and ctx.ASSIGN():
                 nome_funcao = ctx.Identifier().getText()
                 self.methods_code += f".method public static {nome_funcao}(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n"
-                self.methods_code += "   .limit stack 100\n"
-                self.methods_code += "   .limit locals 100\n"
+                self.methods_code += "   .limit stack 300\n"  # Alterado para 300
+                self.methods_code += "   .limit locals 300\n" # Alterado para 300
                 self.inside_method = True
                 self.var_map_local = {} 
                 self.next_var_index = 0 
@@ -604,9 +604,7 @@ class GeradorCodigo(LinguagemListener):
             self.em_console_log = True
             self.emit("   getstatic java/lang/System/out Ljava/io/PrintStream;\n")
 
-
-
-        # --- EXPRESSÕES ---
+    # --- EXPRESSÕES ---
     def enterPrimaryExpression(self, ctx):
         if ctx.Literal():
             val = ctx.Literal().getText()
@@ -671,7 +669,26 @@ class GeradorCodigo(LinguagemListener):
                 idx = self.var_map_main[nome]['index']
                 self.emit(f"   aload {idx}\n")
 
-# --- UNÁRIO ---
+        # acesso a propriedade: obj.prop (suporte simples em cadeia)
+        # nota: ctx.getText() pode juntar tokens; essa implementação supõe primaryExpression com dots
+        children = list(ctx.getChildren())
+        if len(children) >= 3:
+            # detecta padrão Identifier . Identifier (. Identifier)*
+            seq = [c.getText() for c in children]
+            if '.' in seq:
+                # o walker normalmente já carregou a base (Identifier) acima;
+                # garantimos comportamento por segurança: se base é variável, já foi carregada.
+                # para cada acesso .prop fazemos get() do HashMap
+                # não tentamos carregar um novo valor da var_map aqui (redução de complexidade)
+                # assumimos stack: [objeto]
+                for i, tok in enumerate(seq):
+                    if tok == '.':
+                        prop = seq[i+1]
+                        self.emit("   checkcast java/util/HashMap\n")
+                        self.emit(f'   ldc "{prop}"\n')
+                        self.emit("   invokevirtual java/util/HashMap/get(Ljava/lang/Object;)Ljava/lang/Object;\n")
+
+    # --- UNÁRIO ---
     def exitUnaryExpression(self, ctx):
         if ctx.INC() or ctx.DEC():
             self.emit("   pop\n") # <--- ADICIONE ISSO (Limpa o valor automático)
@@ -712,9 +729,6 @@ class GeradorCodigo(LinguagemListener):
                     self.emit("   iconst_m1\n") # -1
                     self.emit("   ixor\n")       # Bitwise XOR
                     self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
-
-        
-                
 
     # --- COMPARAÇÃO ---
     def exitRelationalExpression(self, ctx):
@@ -832,7 +846,6 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   drem\n")  # Operador de resto para doubles
             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
 
-    # --- EXPONENCIAÇÃO (NOVO) ---
     def exitExponentExpression(self, ctx):
         # Nome correto da regra: exponentExpression (não exponentiationExpression)
         # Token correto: POWER (não POW)
@@ -851,7 +864,6 @@ class GeradorCodigo(LinguagemListener):
             self.emit("   invokestatic java/lang/Math/pow(DD)D\n")
             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
 
-    # --- LOOPS ADICIONAIS ---
     def enterDoWhileStatement(self, ctx):
         lbl_start = self.get_next_label()
         lbl_end = self.get_next_label()
@@ -877,7 +889,6 @@ class GeradorCodigo(LinguagemListener):
     def exitWhileStatement(self, ctx):
         pass
 
-    # --- ATRIBUIÇÃO ---
     def exitAssignmentExpression(self, ctx):
         if ctx.assignmentOperator():
             op = ctx.assignmentOperator()
@@ -970,11 +981,6 @@ class GeradorCodigo(LinguagemListener):
                     
                     # Guarda o resultado na variável
                     self.emit(f"   astore {info['index']}\n")
-    
-    # --- EQUALITY (==, ===) ---
-    # Substitua AMBOS os métodos exitEqualityExpression no seu gerador.py por esta versão:
-
-# Substitua AMBOS os métodos exitEqualityExpression no seu gerador.py por esta versão:
 
     def exitEqualityExpression(self, ctx):
         if ctx.EQ() or ctx.SEQ() or ctx.NE() or ctx.SNE():
@@ -1096,38 +1102,6 @@ class GeradorCodigo(LinguagemListener):
                 self.emit(f"{lbl_end}:\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
-# --- COMPARAÇÃO ---
-    def exitRelationalExpression(self, ctx):
-        if ctx.LT() or ctx.GT() or ctx.LE() or ctx.GE():
-            # Desempilha e converte para Double
-            idx_temp = self.next_var_index + 20
-            
-            self.emit("   checkcast java/lang/Number\n")
-            self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-            self.emit(f"   dstore {idx_temp}\n") 
-            
-            self.emit("   checkcast java/lang/Number\n")
-            self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-            self.emit(f"   dload {idx_temp}\n") 
-            
-            self.emit("   dcmpg\n") 
-            
-            lbl_true = self.get_next_label()
-            lbl_end = self.get_next_label()
-            
-            if ctx.LT(): self.emit(f"   iflt {lbl_true}\n") 
-            elif ctx.GT(): self.emit(f"   ifgt {lbl_true}\n")
-            elif ctx.LE(): self.emit(f"   ifle {lbl_true}\n")
-            elif ctx.GE(): self.emit(f"   ifge {lbl_true}\n")
-                
-            self.emit("   iconst_0\n")
-            self.emit(f"   goto {lbl_end}\n")
-            self.emit(f"{lbl_true}:\n")
-            self.emit("   iconst_1\n")
-            self.emit(f"{lbl_end}:\n")
-            self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
-
-    # --- OPERADOR TERNÃRIO (? :) ---
     def exitConditionalExpression(self, ctx):
         # conditionalExpression: logicalOrExpression (QUESTION expression COLON assignmentExpression)?
         if ctx.QUESTION() and ctx.COLON():
@@ -1175,7 +1149,6 @@ class GeradorCodigo(LinguagemListener):
             
             self.emit(f"{lbl_end}:\n")
 
-    # --- OPERADORES BITWISE ---
     def exitBitwiseAndExpression(self, ctx):
         if ctx.B_AND():
             num_ops = len(ctx.B_AND())
@@ -1247,9 +1220,6 @@ class GeradorCodigo(LinguagemListener):
                     self.emit("   ishr\n")  # shift right (aritmético)
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
-
-    
-
     # 1. OPERADOR NOT (!) - Negação Lógica
     def exitUnaryExpression(self, ctx):
        
@@ -1309,8 +1279,6 @@ class GeradorCodigo(LinguagemListener):
             self.emit(f"{lbl_end}:\n")
             self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
-
-    # 2. OPERADOR AND (&&) - E Lógico
     def exitLogicalAndExpression(self, ctx):
         if ctx.AND():
             num_ops = len(ctx.AND())
@@ -1353,8 +1321,6 @@ class GeradorCodigo(LinguagemListener):
                 
                 self.emit(f"{lbl_end}:\n")
 
-
-    # 3. OPERADOR OR (||) - OU Lógico
     def exitLogicalOrExpression(self, ctx):
         if ctx.OR():
             num_ops = len(ctx.OR())
@@ -1397,3 +1363,75 @@ class GeradorCodigo(LinguagemListener):
                 
                 self.emit(f"{lbl_end}:\n")
 
+    # ---------------------------
+    # Suporte a objetos e arrays
+    # ---------------------------
+    # -----------------------------------------------------------
+    # CORREÇÃO DE ARRAYS E OBJETOS (Usa variável temporária)
+    # -----------------------------------------------------------
+    def exitArrayLiteral(self, ctx):
+        # A pilha contém os valores dos elementos: [Val1, Val2, Val3...]
+        # O topo é o último elemento.
+        
+        # 1. Cria o ArrayList
+        self.emit("   new java/util/ArrayList\n")
+        self.emit("   dup\n")
+        self.emit("   invokespecial java/util/ArrayList/<init>()V\n")
+        
+        # 2. Salva o ArrayList numa variável temporária para não perder a referência
+        idx_list = self.next_var_index + 100
+        self.emit(f"   astore {idx_list}\n")
+        
+        # 3. Adiciona os itens (iterando de trás para frente, pois é Pilha LIFO)
+        if ctx.expression():
+            exprs = ctx.expression()
+            for _ in reversed(exprs):
+                # A pilha tem o valor no topo. 
+                # Precisamos carregar a lista, fazer swap e adicionar.
+                
+                self.emit(f"   aload {idx_list}\n") # Stack: [Valor, Lista]
+                self.emit("   swap\n")              # Stack: [Lista, Valor]
+                self.emit("   invokeinterface java/util/List/add(Ljava/lang/Object;)Z 2\n") # Stack: [boolean]
+                self.emit("   pop\n")               # Stack: [] (Limpa o retorno do add)
+        
+        # 4. Devolve o ArrayList para a pilha principal
+        self.emit(f"   aload {idx_list}\n")
+
+    def exitObjectLiteral(self, ctx):
+        # A pilha contém os valores: [Val1, Val2...]
+        
+        self.emit("   new java/util/HashMap\n")
+        self.emit("   dup\n")
+        self.emit("   invokespecial java/util/HashMap/<init>()V\n")
+        
+        idx_map = self.next_var_index + 101
+        self.emit(f"   astore {idx_map}\n")
+        
+        # Itera propriedades de trás para frente (LIFO)
+        # IMPORTANTE: Certifique-se que sua gramática usa 'objProp' ou o nome correto
+        if ctx.objProp(): 
+            props = list(ctx.objProp())
+            for prop in reversed(props):
+                key = prop.Identifier().getText()
+                
+                # Stack tem: [Valor]
+                self.emit(f"   aload {idx_map}\n") # Stack: [Valor, Map]
+                self.emit("   swap\n")              # Stack: [Map, Valor]
+                self.emit(f'   ldc "{key}"\n')      # Stack: [Map, Valor, Key]
+                self.emit("   swap\n")              # Stack: [Map, Key, Valor] (Ordem correta para put)
+                self.emit("   invokevirtual java/util/HashMap/put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n")
+                self.emit("   pop\n")               # Remove retorno do put
+        
+        self.emit(f"   aload {idx_map}\n")
+
+    def exitMemberIndexExpression(self, ctx):
+        # pilha: [lista, índice]
+        # precisamos garantir ordem: lista, índice -> get(I)
+        # convert index to int
+        self.emit("   checkcast java/lang/Number\n")
+        self.emit("   invokevirtual java/lang/Number/intValue()I\n")
+        # lista must be under the int, so swap if necessary is complex;
+        # assumimos padrão gerado pelo parser é [lista, índice] (lista embaixo, índice no topo)
+        # convert list and call get
+        self.emit("   checkcast java/util/List\n")
+        self.emit("   invokeinterface java/util/List/get(I)Ljava/lang/Object; 2\n")

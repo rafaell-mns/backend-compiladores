@@ -166,7 +166,8 @@ arrowFunction:
 
 // Objetos, arrays, call args
 
-objectLiteral: LBRACE (property (COMMA property)*)? RBRACE;
+objectLiteral: LBRACE (objProp (COMMA objProp)*)? RBRACE;
+objProp: Identifier COLON expression;
 
 property: Identifier COLON expression;
 

@@ -368,6 +368,15 @@ class LinguagemListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by LinguagemParser#objProp.
+    def enterObjProp(self, ctx:LinguagemParser.ObjPropContext):
+        pass
+
+    # Exit a parse tree produced by LinguagemParser#objProp.
+    def exitObjProp(self, ctx:LinguagemParser.ObjPropContext):
+        pass
+
+
     # Enter a parse tree produced by LinguagemParser#property.
     def enterProperty(self, ctx:LinguagemParser.PropertyContext):
         pass
