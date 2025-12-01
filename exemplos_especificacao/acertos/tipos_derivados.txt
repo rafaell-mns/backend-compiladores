@@ -14,5 +14,6 @@ function somar(a, b) {
 function multiplicar(a, b) {
   return a * b;
 }
-
+console.log(numeros);
+console.log(misto);
 console.log("Pessoa: " + pessoa); 

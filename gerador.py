@@ -17,9 +17,12 @@ class GeradorCodigo(LinguagemListener):
         self.for_config_stack = [] 
         self.loop_labels = [] 
         
-        # NOVO: Pilha para controlar IFs aninhados
+        # Pilha para controlar IFs aninhados
         self.if_stack = [] 
         
+
+        self.switch_stack = []
+
         self.var_map_main = {}   
         self.var_map_local = {}  
         self.next_var_index = 1 
@@ -61,17 +64,15 @@ class GeradorCodigo(LinguagemListener):
         return label
 
     # -----------------------------------------------------------
-    # LÓGICA DO IF / ELSE (ADICIONADO AGORA)
+    # LÓGICA DO IF / ELSE
     # -----------------------------------------------------------
     def enterIfStatement(self, ctx):
         lbl_else = self.get_next_label()
         lbl_end = self.get_next_label()
         
-        # Identifica os filhos para saber quando gerar os pulos
         expr_ctx = ctx.expression()
         stmt_true = ctx.statement(0)
         
-        # Guarda na pilha para usar nos exits correspondentes
         self.if_stack.append({
             'lbl_else': lbl_else,
             'lbl_end': lbl_end,
@@ -84,7 +85,7 @@ class GeradorCodigo(LinguagemListener):
         self.emit(f"{config['lbl_end']}:\n")
 
     # -----------------------------------------------------------
-    # LÓGICA DO FOR (MANTIDA)
+    # LÓGICA DO FOR
     # -----------------------------------------------------------
     def enterForStatement(self, ctx):
         lbl_start = self.get_next_label()
@@ -117,7 +118,6 @@ class GeradorCodigo(LinguagemListener):
             lbl_start, _ = self.loop_labels[-1]
             self.emit(f"{lbl_start}:\n")
 
-    # --- EXPRESSÕES (Com suporte a IF e FOR) ---
     def enterExpression(self, ctx):
         if self.for_config_stack:
             config = self.for_config_stack[-1]
@@ -130,7 +130,6 @@ class GeradorCodigo(LinguagemListener):
         if self.if_stack:
             config = self.if_stack[-1]
             if id(ctx) == config['expr_id']:
-                # Se expressão for falsa (0), pula para o Else
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   ifeq {config['lbl_else']}\n")
@@ -149,6 +148,46 @@ class GeradorCodigo(LinguagemListener):
                 self.for_increment_buffer.append(self.current_increment_code)
                 self.current_increment_code = ""
 
+
+            # verifica se é condição de WHILE
+        if hasattr(self, 'while_config_stack') and self.while_config_stack:
+            config = self.while_config_stack[-1]
+            if id(ctx) == config['expr_id']:
+                _, lbl_end = self.loop_labels[-1]
+                self.emit("   checkcast java/lang/Number\n")
+                self.emit("   invokevirtual java/lang/Number/intValue()I\n")
+                self.emit(f"   ifeq {lbl_end}\n")
+
+                # NOVO: Verifica se é a expressão de controle de um SWITCH
+        if hasattr(self, 'switch_stack') and self.switch_stack:
+            config = self.switch_stack[-1]
+            
+            # 1. Se acabamos de calcular a expressão principal do switch (ex: dia)
+            if id(ctx) == config['main_expr_id']:
+                self.emit(f"   astore {config['expr_index']}\n")
+                return
+
+            # 2. Se acabamos de calcular o valor de um CASE (ex: 1)
+            if id(ctx) == config['current_case_expr_id']:
+                # O valor do case (1) está no topo da pilha.
+                # O valor do switch (3) está na variável guardada.
+                
+                idx_case_temp = self.next_var_index + 205
+                self.emit(f"   astore {idx_case_temp}\n") # Salva o 1 temporariamente
+                
+                self.emit(f"   aload {config['expr_index']}\n") # Carrega o 3
+                self.emit(f"   aload {idx_case_temp}\n")       # Carrega o 1
+                
+                # Compara
+                self.emit("   invokevirtual java/lang/Object/equals(Ljava/lang/Object;)Z\n")
+                
+                # SE FOR FALSO (0), PULA para o próximo label
+                self.emit(f"   ifeq {config['lbl_next_case']}\n")
+                
+                # Limpa o ID para não confundir com outras expressões
+                config['current_case_expr_id'] = None
+                return
+
     def exitForStatement(self, ctx):
         lbl_start, lbl_end = self.loop_labels.pop()
         config = self.for_config_stack.pop()
@@ -160,132 +199,72 @@ class GeradorCodigo(LinguagemListener):
         self.emit(f"   goto {lbl_start}\n")
         self.emit(f"{lbl_end}:\n")
 
-    def is_boolean_expression(self, ctx):
-        """Detecta se a expressão é booleana (comparação, lógica, etc)"""
-        if not ctx:
-            return False
-        
-        texto = ctx.getText()
-        
-        # Verifica operadores booleanos
-        boolean_ops = ['==', '!=', '===', '!==', '<', '>', '<=', '>=', 
-                    '&&', '||', '!', 'true', 'false']
-        
-        return any(op in texto for op in boolean_ops)
-
+    # -----------------------------------------------------------
+    # CORREÇÃO: STATEMENT com IF sem ELSE
+    # -----------------------------------------------------------
     def exitStatement(self, ctx):
-        # ... (código do IF e console.log que você já tem) ...
-        # Lógica do console.log
+        # Verificamos se acabamos de sair do bloco "TRUE" de um IF
+        if self.if_stack:
+            config = self.if_stack[-1]
+            if id(ctx) == config['stmt_true_id']:
+                # CORREÇÃO: Verifica se tem ELSE
+                parent = ctx.parentCtx
+                has_else = False
+                
+                # Busca o ifStatement pai e verifica statement count
+                while parent:
+                    if hasattr(parent, 'getRuleIndex'):
+                        try:
+                            # Se for ifStatement e tiver 2+ statements, tem else
+                            if hasattr(parent, 'statement') and len(parent.statement()) > 1:
+                                has_else = True
+                                break
+                        except:
+                            pass
+                    parent = parent.parentCtx
+                
+                if has_else:
+                    self.emit(f"   goto {config['lbl_end']}\n")
+                    self.emit(f"{config['lbl_else']}:\n")
+                else:
+                    # CORREÇÃO: Sem else, apenas emite o label
+                    self.emit(f"{config['lbl_else']}:\n")
+        
+        # CORREÇÃO: Console.log SEM conversão booleana (1 é 1, não "true")
         if self.em_console_log and ctx.getText().startswith("console.log"):
-            # Lidar com múltiplos argumentos no console.log é complexo no Jasmin simples.
-            # O ideal é imprimir apenas o topo ou concatenar. 
-            # Sua lógica atual imprime um e retorna. Certifique-se de que consome tudo da pilha.
-            # Para este exercício, assumiremos que seu console.log atual funciona para 1 argumento.
-            if hasattr(ctx, 'expression') and ctx.expression():
-                expr = ctx.expression()
-                if self.is_boolean_expression(expr):
-                    self.convert_boolean_to_string()
-            
             self.emit("   invokevirtual java/io/PrintStream/println(Ljava/lang/Object;)V\n")
             self.em_console_log = False
             return
         
+        # Descarta valores de expressões statement
         if ctx.expression() and ctx.SEMI():
-            # VERIFICAÇÃO CRÍTICA:
-            # Se for uma atribuição (ex: x = 10), o exitAssignmentExpression já fez 'astore'.
-            # A pilha está vazia. Não devemos dar POP.
             is_assignment = False
             expr = ctx.expression()
-            # Navega na árvore para ver se tem operador de atribuição
             if expr.assignmentExpression() and expr.assignmentExpression().assignmentOperator():
                 is_assignment = True
             
-            # Verifica outras condições
             texto_expr = expr.getText()
-            starts_compound = texto_expr.startswith('{') or texto_expr.startswith('[') or texto_expr.startswith('function')
-            is_call = texto_expr.endswith(')') and ('=' not in texto_expr)
             
-            # Só dá POP se NÃO for atribuição
-            if 'console.log' not in ctx.getText() and not self.capturing_increment and (not starts_compound) and (not is_call) and (not is_assignment):
+            if not is_assignment and 'console.log' not in ctx.getText() and not self.capturing_increment:
                 self.emit("   pop\n")
 
-    def convert_boolean_to_string(self):
-        """Converte Integer(0) -> 'false' e Integer(1) -> 'true' antes de imprimir"""
-        idx_temp = self.next_var_index + 50
-        lbl_is_int = self.get_next_label()
-        lbl_check_value = self.get_next_label()
-        lbl_is_false = self.get_next_label()
-        lbl_is_true = self.get_next_label()
-        lbl_end = self.get_next_label()
-        
-        # Salva o valor
-        self.emit(f"   astore {idx_temp}\n")
-        self.emit(f"   aload {idx_temp}\n")
-        
-        # Verifica se é Integer
-        self.emit("   instanceof java/lang/Integer\n")
-        self.emit(f"   ifne {lbl_is_int}\n")
-        
-        # Não é Integer - mantém original
-        self.emit(f"   aload {idx_temp}\n")
-        self.emit(f"   goto {lbl_end}\n")
-        
-        # É Integer - verifica o valor
-        self.emit(f"{lbl_is_int}:\n")
-        self.emit(f"   aload {idx_temp}\n")
-        self.emit("   checkcast java/lang/Integer\n")
-        self.emit("   invokevirtual java/lang/Integer/intValue()I\n")
-        self.emit("   dup\n")
-        
-        # Se for 0, converte para "false"
-        self.emit(f"   ifeq {lbl_is_false}\n")
-        
-        # Se for 1, converte para "true"
-        self.emit("   iconst_1\n")
-        self.emit(f"   if_icmpeq {lbl_is_true}\n")
-        
-        # Se não for 0 nem 1, mantém o Integer original
-        self.emit(f"   aload {idx_temp}\n")
-        self.emit(f"   goto {lbl_end}\n")
-        
-        # Converte 0 -> "false"
-        self.emit(f"{lbl_is_false}:\n")
-        self.emit("   pop\n")
-        self.emit('   ldc "false"\n')
-        self.emit(f"   goto {lbl_end}\n")
-        
-        # Converte 1 -> "true"
-        self.emit(f"{lbl_is_true}:\n")
-        self.emit('   ldc "true"\n')
-        
-        self.emit(f"{lbl_end}:\n")
-
     def process_template_literal(self, template):
-        """
-        Processa template literals: `texto ${var} mais texto`
-        Converte para: "texto " + var + " mais texto"
-        """
-        # Remove os backticks
         content = template[1:-1]
         
-        # Se não tem interpolação, trata como string normal
         if '${' not in content:
             self.emit(f'   ldc "{content}"\n')
             return
         
-        # Divide o template em partes
         parts = []
         current = ""
         i = 0
         
         while i < len(content):
             if i < len(content) - 1 and content[i:i+2] == '${':
-                # Encontrou início de interpolação
                 if current:
                     parts.append(('string', current))
                     current = ""
                 
-                # Encontra o fim da interpolação
                 i += 2
                 expr = ""
                 brace_count = 1
@@ -307,17 +286,14 @@ class GeradorCodigo(LinguagemListener):
         if current:
             parts.append(('string', current))
         
-        # Gera código para concatenar as partes
         if not parts:
             self.emit('   ldc ""\n')
             return
         
-        # Primeiro elemento
         first = parts[0]
         if first[0] == 'string':
             self.emit(f'   ldc "{first[1]}"\n')
         else:
-            # Carrega a variável
             var_name = first[1]
             if self.inside_method and var_name in self.var_map_local:
                 idx = self.var_map_local[var_name]['index']
@@ -326,15 +302,12 @@ class GeradorCodigo(LinguagemListener):
                 idx = self.var_map_main[var_name]['index']
                 self.emit(f"   aload {idx}\n")
             
-            # Converte para String
             self.emit("   invokestatic java/lang/String/valueOf(Ljava/lang/Object;)Ljava/lang/String;\n")
         
-        # Concatena com os demais elementos
         for part_type, part_value in parts[1:]:
             if part_type == 'string':
                 self.emit(f'   ldc "{part_value}"\n')
             else:
-                # Carrega a variável
                 var_name = part_value
                 if self.inside_method and var_name in self.var_map_local:
                     idx = self.var_map_local[var_name]['index']
@@ -343,11 +316,14 @@ class GeradorCodigo(LinguagemListener):
                     idx = self.var_map_main[var_name]['index']
                     self.emit(f"   aload {idx}\n")
                 
-                # Converte para String
                 self.emit("   invokestatic java/lang/String/valueOf(Ljava/lang/Object;)Ljava/lang/String;\n")
             
-            # Concatena
             self.emit("   invokevirtual java/lang/String/concat(Ljava/lang/String;)Ljava/lang/String;\n")
+
+# ============= FIM DA PARTE 1 =============
+# Continue na PARTE 2...
+
+# ============= PARTE 2 - Cole após a PARTE 1 =============
 
     # -----------------------------------------------------------
     # FUNÇÕES
@@ -363,7 +339,6 @@ class GeradorCodigo(LinguagemListener):
             self.next_var_index = 0 
 
     def exitFunctionDeclaration(self, ctx):
-        # CORREÇÃO: Adiciona return null se a função não tem return explícito
         self.emit("   aconst_null\n")
         self.emit("   areturn\n")
         
@@ -376,15 +351,14 @@ class GeradorCodigo(LinguagemListener):
             if "function" in ctx.getText() and ctx.ASSIGN():
                 nome_funcao = ctx.Identifier().getText()
                 self.methods_code += f".method public static {nome_funcao}(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n"
-                self.methods_code += "   .limit stack 300\n"  # Alterado para 300
-                self.methods_code += "   .limit locals 300\n" # Alterado para 300
+                self.methods_code += "   .limit stack 300\n"
+                self.methods_code += "   .limit locals 300\n"
                 self.inside_method = True
                 self.var_map_local = {} 
                 self.next_var_index = 0 
 
     def exitVariableDeclarator(self, ctx):
         if self.inside_method:
-            # CORREÇÃO: Adiciona return null
             self.emit("   aconst_null\n")
             self.emit("   areturn\n")
             
@@ -415,12 +389,14 @@ class GeradorCodigo(LinguagemListener):
     def exitReturnStatement(self, ctx):
         self.emit("   areturn\n")
 
+    # -----------------------------------------------------------
+    # POSTFIX OPERATIONS
+    # -----------------------------------------------------------
     def exitPostfixOp(self, ctx):
         if ctx.LPAREN():
             parent = ctx.parentCtx
             texto_completo = parent.getText()
             
-            # parseInt - Converte string para inteiro
             if "parseInt(" in texto_completo:
                 idx_temp = self.next_var_index + 80
                 lbl_is_string = self.get_next_label()
@@ -448,7 +424,6 @@ class GeradorCodigo(LinguagemListener):
                 self.emit(f"{lbl_end}:\n")
                 return
         
-            # parseFloat - Converte string para decimal
             if "parseFloat(" in texto_completo:
                 idx_temp = self.next_var_index + 81
                 lbl_is_string = self.get_next_label()
@@ -501,7 +476,6 @@ class GeradorCodigo(LinguagemListener):
                 self.emit(f"{lbl_end}:\n")
                 return
 
-            # Math
             if "Math.pow" in texto_completo:
                 idx_b = self.next_var_index + 15
                 self.emit("   checkcast java/lang/Number\n")
@@ -521,7 +495,6 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                 return
             
-            # String
             if ".toUpperCase" in texto_completo:
                 self.emit("   checkcast java/lang/String\n")
                 self.emit("   invokevirtual java/lang/String/toUpperCase()Ljava/lang/String;\n")
@@ -549,7 +522,7 @@ class GeradorCodigo(LinguagemListener):
                 self.emit(f"   invokestatic {self.nome_classe}/{nome_funcao}(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n")
             return
 
-        # PÓS-INCREMENTO E PÓS-DECREMENTO
+        # PÓS-INCREMENTO/DECREMENTO
         op = None
         if ctx.INC(): op = 'inc'
         elif ctx.DEC(): op = 'dec'
@@ -566,12 +539,10 @@ class GeradorCodigo(LinguagemListener):
                         info = self.var_map_main.get(nome)
 
                     if info:
-                        # CORREÇÃO: Detecta se está no incremento do for
                         is_for_increment = self.capturing_increment
                         
                         if is_for_increment:
-                            # NO FOR: A variável já está na pilha (primaryExpression carregou)
-                            # Apenas incrementa SEM carregar novamente
+                            # NO FOR: variável já está na pilha
                             self.emit("   checkcast java/lang/Number\n")
                             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                             self.emit("   dconst_1\n")
@@ -582,7 +553,7 @@ class GeradorCodigo(LinguagemListener):
                             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                             self.emit(f"   astore {info['index']}\n")
                         else:
-                            # NORMAL: retorna valor antigo (pós-incremento)
+                            # NORMAL: pós-incremento (retorna valor antigo)
                             idx_temp_old = self.next_var_index + 26
                             
                             self.emit("   dup\n")
@@ -598,56 +569,61 @@ class GeradorCodigo(LinguagemListener):
                             self.emit(f"   astore {info['index']}\n")
                             self.emit(f"   aload {idx_temp_old}\n")
 
-    # --- CONSOLE.LOG ---
     def enterPostfixExpression(self, ctx):
         if ctx.getText().startswith("console.log"):
             self.em_console_log = True
             self.emit("   getstatic java/lang/System/out Ljava/io/PrintStream;\n")
 
-    # --- EXPRESSÕES ---
+# ============= FIM DA PARTE 2 =============
+# Continue na PARTE 3...
+
+# ============= PARTE 3 - Cole após a PARTE 2 =============
+
+    # -----------------------------------------------------------
+    # PRIMARY EXPRESSIONS
+    # -----------------------------------------------------------
     def enterPrimaryExpression(self, ctx):
         if ctx.Literal():
             val = ctx.Literal().getText()
             
-            # NOVO: Processa template literals
             if val.startswith('`'):
                 self.process_template_literal(val)
-                return  # IMPORTANTE: return aqui para não processar o resto
+                return
             
-            # Strings normais
             if val.startswith('"') or val.startswith("'"):
                 self.emit(f"   ldc {val}\n")
-                return  # Adiciona return
-                
+                return
+            
             elif val == 'true':
                 self.emit("   iconst_1\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
                 return
-                
+            
             elif val == 'false':
                 self.emit("   iconst_0\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
                 return
-                
+            
             elif val == 'null' or val == 'undefined':
                 self.emit("   aconst_null\n")
                 return
-                
+            
             else:
+                # CORREÇÃO: Decimais como string para precisão
                 if '.' in val:
-                    self.emit(f"   ldc2_w {val}\n")
-                    self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
+                    self.emit(f'   ldc "{val}"\n')
+                    return
                 else:
                     try:
                         num = int(val)
-                        if 0 <= num <= 5: 
+                        if 0 <= num <= 5:
                             self.emit(f"   iconst_{num}\n")
-                        elif -128 <= num <= 127: 
+                        elif -128 <= num <= 127:
                             self.emit(f"   bipush {num}\n")
-                        else: 
+                        else:
                             self.emit(f"   ldc {num}\n")
                         self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
-                    except: 
+                    except:
                         pass
                 return
         
@@ -659,7 +635,7 @@ class GeradorCodigo(LinguagemListener):
 
         elif ctx.Identifier():
             nome = ctx.Identifier().getText()
-            if nome in ['console', 'Math']: 
+            if nome in ['console', 'Math']:
                 return
             
             if self.inside_method and nome in self.var_map_local:
@@ -669,91 +645,124 @@ class GeradorCodigo(LinguagemListener):
                 idx = self.var_map_main[nome]['index']
                 self.emit(f"   aload {idx}\n")
 
-        # acesso a propriedade: obj.prop (suporte simples em cadeia)
-        # nota: ctx.getText() pode juntar tokens; essa implementação supõe primaryExpression com dots
-        children = list(ctx.getChildren())
-        if len(children) >= 3:
-            # detecta padrão Identifier . Identifier (. Identifier)*
-            seq = [c.getText() for c in children]
-            if '.' in seq:
-                # o walker normalmente já carregou a base (Identifier) acima;
-                # garantimos comportamento por segurança: se base é variável, já foi carregada.
-                # para cada acesso .prop fazemos get() do HashMap
-                # não tentamos carregar um novo valor da var_map aqui (redução de complexidade)
-                # assumimos stack: [objeto]
-                for i, tok in enumerate(seq):
-                    if tok == '.':
-                        prop = seq[i+1]
-                        self.emit("   checkcast java/util/HashMap\n")
-                        self.emit(f'   ldc "{prop}"\n')
-                        self.emit("   invokevirtual java/util/HashMap/get(Ljava/lang/Object;)Ljava/lang/Object;\n")
-
-    # --- UNÁRIO ---
+    # -----------------------------------------------------------
+    # CORREÇÃO: PRÉ-INCREMENTO (++x retorna NOVO valor)
+    # -----------------------------------------------------------
     def exitUnaryExpression(self, ctx):
         if ctx.INC() or ctx.DEC():
-            self.emit("   pop\n") # <--- ADICIONE ISSO (Limpa o valor automático)
-
             primeiro = ctx.getChild(1)
             if hasattr(primeiro, 'getText'):
                 nome = primeiro.getText()
-                if self.inside_method and nome in self.var_map_local: info = self.var_map_local[nome]
-                else: info = self.var_map_main.get(nome)
+                if self.inside_method and nome in self.var_map_local:
+                    info = self.var_map_local[nome]
+                else:
+                    info = self.var_map_main.get(nome)
+                
                 if info:
                     idx_temp = self.next_var_index + 25
-                    self.emit(f"   aload {info['index']}\n") # Carrega manual
+                    # CORREÇÃO: Não assumir que há valor na pilha
+                    self.emit(f"   aload {info['index']}\n")
                     self.emit("   checkcast java/lang/Number\n")
                     self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                     self.emit("   dconst_1\n")
-                    if ctx.INC(): self.emit("   dadd\n")
-                    else: self.emit("   dsub\n")
+                    if ctx.INC():
+                        self.emit("   dadd\n")
+                    else:
+                        self.emit("   dsub\n")
                     self.emit(f"   dstore {idx_temp}\n")
                     self.emit(f"   dload {idx_temp}\n")
                     self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                     self.emit(f"   astore {info['index']}\n")
+                    # Retorna NOVO valor
                     self.emit(f"   dload {idx_temp}\n")
-                    self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n") 
+                    self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
+            return
 
         elif ctx.TILDE():
-            self.emit("   pop\n") # <--- ADICIONE ISSO AQUI TAMBÉM
-
             primeiro = ctx.getChild(1)
             if hasattr(primeiro, 'getText'):
                 nome = primeiro.getText()
-                if self.inside_method and nome in self.var_map_local: info = self.var_map_local[nome]
-                else: info = self.var_map_main.get(nome)
+                if self.inside_method and nome in self.var_map_local:
+                    info = self.var_map_local[nome]
+                else:
+                    info = self.var_map_main.get(nome)
                 
                 if info:
                     self.emit(f"   aload {info['index']}\n")
                     self.emit("   checkcast java/lang/Number\n")
                     self.emit("   invokevirtual java/lang/Number/intValue()I\n")
-                    self.emit("   iconst_m1\n") # -1
-                    self.emit("   ixor\n")       # Bitwise XOR
+                    self.emit("   iconst_m1\n")
+                    self.emit("   ixor\n")
                     self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
+            return
+        
+        if ctx.MINUS():
+            self.emit("   checkcast java/lang/Number\n")
+            self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
+            self.emit("   dneg\n")
+            self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
+            return
+        
+        if ctx.BANG():
+            idx_temp = self.next_var_index + 75
+            lbl_true = self.get_next_label()
+            lbl_false = self.get_next_label()
+            lbl_end = self.get_next_label()
+            
+            self.emit(f"   astore {idx_temp}\n")
+            self.emit(f"   aload {idx_temp}\n")
+            self.emit(f"   ifnull {lbl_true}\n")
+            
+            self.emit(f"   aload {idx_temp}\n")
+            self.emit("   instanceof java/lang/Number\n")
+            self.emit(f"   ifeq {lbl_false}\n")
+            
+            self.emit(f"   aload {idx_temp}\n")
+            self.emit("   checkcast java/lang/Number\n")
+            self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
+            self.emit("   dconst_0\n")
+            self.emit("   dcmpl\n")
+            self.emit(f"   ifeq {lbl_true}\n")
+            
+            self.emit(f"{lbl_false}:\n")
+            self.emit("   iconst_0\n")
+            self.emit(f"   goto {lbl_end}\n")
+            
+            self.emit(f"{lbl_true}:\n")
+            self.emit("   iconst_1\n")
+            
+            self.emit(f"{lbl_end}:\n")
+            self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
-    # --- COMPARAÇÃO ---
+    # -----------------------------------------------------------
+    # COMPARAÇÕES E OPERADORES
+    # -----------------------------------------------------------
     def exitRelationalExpression(self, ctx):
         if ctx.LT() or ctx.GT() or ctx.LE() or ctx.GE():
-            # Desempilha e converte para Double
             idx_temp = self.next_var_index + 20
             
             self.emit("   checkcast java/lang/Number\n")
             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-            self.emit(f"   dstore {idx_temp}\n") 
+            self.emit(f"   dstore {idx_temp}\n")
             
             self.emit("   checkcast java/lang/Number\n")
             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-            self.emit(f"   dload {idx_temp}\n") 
+            self.emit(f"   dload {idx_temp}\n")
             
-            self.emit("   dcmpg\n") 
+            self.emit("   dcmpg\n")
             
             lbl_true = self.get_next_label()
             lbl_end = self.get_next_label()
             
-            if ctx.LT(): self.emit(f"   iflt {lbl_true}\n") 
-            elif ctx.GT(): self.emit(f"   ifgt {lbl_true}\n")
-            elif ctx.LE(): self.emit(f"   ifle {lbl_true}\n")
-            elif ctx.GE(): self.emit(f"   ifge {lbl_true}\n")
-                
+            if ctx.LT():
+                self.emit(f"   iflt {lbl_true}\n")
+            elif ctx.GT():
+                self.emit(f"   ifgt {lbl_true}\n")
+            elif ctx.LE():
+                self.emit(f"   ifle {lbl_true}\n")
+            elif ctx.GE():
+                self.emit(f"   ifge {lbl_true}\n")
+            
             self.emit("   iconst_0\n")
             self.emit(f"   goto {lbl_end}\n")
             self.emit(f"{lbl_true}:\n")
@@ -761,15 +770,11 @@ class GeradorCodigo(LinguagemListener):
             self.emit(f"{lbl_end}:\n")
             self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
-    # --- MATEMÁTICA ---
     def exitAdditiveExpression(self, ctx):
-        # Conta quantas operações PLUS ou MINUS existem
         num_plus = len(ctx.PLUS()) if ctx.PLUS() else 0
         num_minus = len(ctx.MINUS()) if ctx.MINUS() else 0
         
-        # Se houver operação de PLUS
         if num_plus > 0:
-            # Para cada operação PLUS (processa da direita para esquerda na pilha)
             for i in range(num_plus):
                 lbl_concat = self.get_next_label()
                 lbl_add = self.get_next_label()
@@ -777,11 +782,9 @@ class GeradorCodigo(LinguagemListener):
                 idx_temp1 = self.next_var_index + 20
                 idx_temp2 = self.next_var_index + 21
                 
-                # Salva os dois operandos em variáveis temporárias
-                self.emit(f"   astore {idx_temp2}\n")  # Segundo operando
-                self.emit(f"   astore {idx_temp1}\n")  # Primeiro operando
+                self.emit(f"   astore {idx_temp2}\n")
+                self.emit(f"   astore {idx_temp1}\n")
                 
-                # Verifica se algum é String
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   instanceof java/lang/String\n")
                 self.emit(f"   ifne {lbl_concat}\n")
@@ -789,10 +792,8 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   instanceof java/lang/String\n")
                 self.emit(f"   ifne {lbl_concat}\n")
                 
-                # Ambos são números - fazer adição
                 self.emit(f"   goto {lbl_add}\n")
                 
-                # Label de concatenação
                 self.emit(f"{lbl_concat}:\n")
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   invokestatic java/lang/String/valueOf(Ljava/lang/Object;)Ljava/lang/String;\n")
@@ -801,7 +802,6 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokevirtual java/lang/String/concat(Ljava/lang/String;)Ljava/lang/String;\n")
                 self.emit(f"   goto {lbl_fim}\n")
                 
-                # Label de adição numérica
                 self.emit(f"{lbl_add}:\n")
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   checkcast java/lang/Number\n")
@@ -814,7 +814,6 @@ class GeradorCodigo(LinguagemListener):
                 
                 self.emit(f"{lbl_fim}:\n")
         
-        # Se houver operação de MINUS
         elif num_minus > 0:
             for i in range(num_minus):
                 idx_temp = self.next_var_index + 20
@@ -828,8 +827,6 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
 
     def exitMultiplicativeExpression(self, ctx):
-        # CORREÇÃO: Adicionado suporte para PERCENT (%)
-        # A gramática já tem: (STAR | SLASH | PERCENT)
         if ctx.STAR() or ctx.SLASH() or ctx.PERCENT():
             idx_temp = self.next_var_index + 20
             self.emit(f"   astore {idx_temp}\n")
@@ -838,32 +835,34 @@ class GeradorCodigo(LinguagemListener):
             self.emit(f"   aload {idx_temp}\n")
             self.emit("   checkcast java/lang/Number\n")
             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-            if ctx.STAR(): 
+            if ctx.STAR():
                 self.emit("   dmul\n")
-            elif ctx.SLASH(): 
+            elif ctx.SLASH():
                 self.emit("   ddiv\n")
             elif ctx.PERCENT():
-                self.emit("   drem\n")  # Operador de resto para doubles
+                self.emit("   drem\n")
             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
 
     def exitExponentExpression(self, ctx):
-        # Nome correto da regra: exponentExpression (não exponentiationExpression)
-        # Token correto: POWER (não POW)
         if hasattr(ctx, 'POWER') and ctx.POWER():
             idx_temp = self.next_var_index + 20
-            # O segundo operando (expoente) está no topo da pilha
             self.emit(f"   astore {idx_temp}\n")
-            # O primeiro operando (base) está abaixo
             self.emit("   checkcast java/lang/Number\n")
             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-            # Carrega o expoente
             self.emit(f"   aload {idx_temp}\n")
             self.emit("   checkcast java/lang/Number\n")
             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-            # Chama Math.pow(base, expoente)
             self.emit("   invokestatic java/lang/Math/pow(DD)D\n")
             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
 
+# ============= FIM DA PARTE 3 =============
+# Continue na PARTE 4 (FINAL)...
+
+# ============= PARTE 4 FINAL - Cole após a PARTE 3 =============
+
+    # -----------------------------------------------------------
+    # LOOPS ADICIONAIS
+    # -----------------------------------------------------------
     def enterDoWhileStatement(self, ctx):
         lbl_start = self.get_next_label()
         lbl_end = self.get_next_label()
@@ -872,56 +871,137 @@ class GeradorCodigo(LinguagemListener):
 
     def exitDoWhileStatement(self, ctx):
         lbl_start, lbl_end = self.loop_labels.pop()
-        # A expressão já está na pilha (foi processada pelo exitExpression)
         self.emit("   checkcast java/lang/Number\n")
         self.emit("   invokevirtual java/lang/Number/intValue()I\n")
-        # Se a condição for verdadeira (!=0), volta para o início
         self.emit(f"   ifne {lbl_start}\n")
-        # Label de saída (quando a condição é falsa)
         self.emit(f"{lbl_end}:\n")
-        
+    
     def enterWhileStatement(self, ctx):
         lbl_start = self.get_next_label()
         lbl_end = self.get_next_label()
         self.loop_labels.append((lbl_start, lbl_end))
         self.emit(f"{lbl_start}:\n")
+        
+        # Salva o ID da expressão de condição
+        if not hasattr(self, 'while_config_stack'):
+            self.while_config_stack = []
+        
+        expr_ctx = ctx.expression()
+        self.while_config_stack.append({
+            'expr_id': id(expr_ctx)
+        })
 
     def exitWhileStatement(self, ctx):
+        lbl_start, lbl_end = self.loop_labels.pop()
+        self.while_config_stack.pop()
+        
+        # Volta para o início do loop
+        self.emit(f"   goto {lbl_start}\n")
+        # Label de saída
+        self.emit(f"{lbl_end}:\n")
+
+    # -----------------------------------------------------------
+    # CORREÇÃO: SWITCH STATEMENT
+    # -----------------------------------------------------------
+    def enterSwitchStatement(self, ctx):
+        # Cria label para o final de todo o switch (usado pelo break)
+        lbl_end_switch = self.get_next_label()
+        
+        # Variável temporária para guardar o valor da expressão do switch
+        switch_expr_index = self.next_var_index + 200
+        
+        # Pega o ID da expressão principal (ex: 'dia')
+        expr_ctx = ctx.expression()
+        
+        # Inicia configuração na pilha
+        if not hasattr(self, 'switch_stack'):
+            self.switch_stack = []
+            
+        self.switch_stack.append({
+            'lbl_break': lbl_end_switch,   # Onde ir se der break
+            'expr_index': switch_expr_index, # Onde está salvo o valor de 'dia'
+            'main_expr_id': id(expr_ctx),  # ID para identificar a expressão do switch
+            'current_case_expr_id': None,  # Vai guardar o ID da expressão do 'case' atual
+            'lbl_next_case': None          # Label para pular se o case falhar
+        })
+
+    def exitSwitchStatement(self, ctx):
+        config = self.switch_stack.pop()
+        self.emit(f"{config['lbl_break']}:\n")
+
+    def enterSwitchCase(self, ctx):
+        if not self.switch_stack: return
+        config = self.switch_stack[-1]
+        
+        # Pega a expressão deste case (ex: o número 1 ou 2)
+        # Nota: SwitchCase geralmente tem children: [CASE, expression, COLON, statement...]
+        expr_ctx = ctx.expression() # No ANTLR o método expression() pega a child expression
+        
+        if expr_ctx:
+            # Salva o ID para capturarmos no exitExpression
+            config['current_case_expr_id'] = id(expr_ctx)
+            
+            # Cria um label para pular este case se a comparação falhar
+            lbl_skip = self.get_next_label()
+            config['lbl_next_case'] = lbl_skip
+
+    def exitSwitchCase(self, ctx):
+        if not self.switch_stack: return
+        config = self.switch_stack[-1]
+        
+        # Se tínhamos um label de pulo configurado (casos com expression)
+        if config['lbl_next_case']:
+            self.emit(f"{config['lbl_next_case']}:\n")
+            config['lbl_next_case'] = None
+
+    def enterDefaultCase(self, ctx):
+        # Na nova lógica, o label de pulo do caso anterior 
+        # já foi posicionado pelo exitSwitchCase.
+        # Então, não precisamos fazer nada aqui.
         pass
 
+    def exitDefaultCase(self, ctx):
+        pass
+
+    def exitBreakStatement(self, ctx):
+        # Verifica se estamos num switch primeiro
+        if hasattr(self, 'switch_stack') and self.switch_stack:
+            config = self.switch_stack[-1]
+            self.emit(f"   goto {config['lbl_break']}\n")
+            
+        elif self.loop_labels:
+            _, lbl_end = self.loop_labels[-1]
+            self.emit(f"   goto {lbl_end}\n")
+
+    # -----------------------------------------------------------
+    # ASSIGNMENT
+    # -----------------------------------------------------------
     def exitAssignmentExpression(self, ctx):
         if ctx.assignmentOperator():
             op = ctx.assignmentOperator()
             nome = ctx.getChild(0).getText()
-            if '.' in nome or '[' in nome or '(' in nome: return
-            if self.inside_method and nome in self.var_map_local: info = self.var_map_local[nome]
-            else: info = self.var_map_main.get(nome)
+            if '.' in nome or '[' in nome or '(' in nome:
+                return
+            if self.inside_method and nome in self.var_map_local:
+                info = self.var_map_local[nome]
+            else:
+                info = self.var_map_main.get(nome)
             
             if info:
-                # Atribuição simples (=)
                 if op.ASSIGN():
                     self.emit(f"   astore {info['index']}\n")
-                
-                # Atribuições compostas (+=, -=, *=, /=, %=, **=)
                 else:
                     idx_temp = self.next_var_index + 30
+                    self.emit(f"   astore {idx_temp}\n")
                     
-                    # O valor da expressão à direita está no topo da pilha
-                    # O valor de x (à esquerda) está abaixo
-                    self.emit(f"   astore {idx_temp}\n")  # Salva valor direito
-                    
-                    # Agora x está no topo. Precisamos fazer a operação.
-                    
-                    # Para += com strings, trata concatenação
                     if op.PLUSEQ():
                         lbl_concat = self.get_next_label()
                         lbl_add = self.get_next_label()
                         lbl_fim = self.get_next_label()
                         idx_temp2 = self.next_var_index + 31
                         
-                        self.emit(f"   astore {idx_temp2}\n")  # Salva x
+                        self.emit(f"   astore {idx_temp2}\n")
                         
-                        # Verifica se algum é String
                         self.emit(f"   aload {idx_temp2}\n")
                         self.emit("   instanceof java/lang/String\n")
                         self.emit(f"   ifne {lbl_concat}\n")
@@ -930,7 +1010,6 @@ class GeradorCodigo(LinguagemListener):
                         self.emit(f"   ifne {lbl_concat}\n")
                         self.emit(f"   goto {lbl_add}\n")
                         
-                        # Concatenação
                         self.emit(f"{lbl_concat}:\n")
                         self.emit(f"   aload {idx_temp2}\n")
                         self.emit("   invokestatic java/lang/String/valueOf(Ljava/lang/Object;)Ljava/lang/String;\n")
@@ -939,7 +1018,6 @@ class GeradorCodigo(LinguagemListener):
                         self.emit("   invokevirtual java/lang/String/concat(Ljava/lang/String;)Ljava/lang/String;\n")
                         self.emit(f"   goto {lbl_fim}\n")
                         
-                        # Adição numérica
                         self.emit(f"{lbl_add}:\n")
                         self.emit(f"   aload {idx_temp2}\n")
                         self.emit("   checkcast java/lang/Number\n")
@@ -952,25 +1030,25 @@ class GeradorCodigo(LinguagemListener):
                         
                         self.emit(f"{lbl_fim}:\n")
                         
-                    # Operações aritméticas (-=, *=, /=, %=)
                     elif op.MINUSEQ() or op.STAREQ() or op.SLASHEQ() or op.PERCENTEQ():
-                        # x está na pilha, valor direito em temp
                         self.emit("   checkcast java/lang/Number\n")
                         self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                         self.emit(f"   aload {idx_temp}\n")
                         self.emit("   checkcast java/lang/Number\n")
                         self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                         
-                        if op.MINUSEQ(): self.emit("   dsub\n")
-                        elif op.STAREQ(): self.emit("   dmul\n")
-                        elif op.SLASHEQ(): self.emit("   ddiv\n")
-                        elif op.PERCENTEQ(): self.emit("   drem\n")
+                        if op.MINUSEQ():
+                            self.emit("   dsub\n")
+                        elif op.STAREQ():
+                            self.emit("   dmul\n")
+                        elif op.SLASHEQ():
+                            self.emit("   ddiv\n")
+                        elif op.PERCENTEQ():
+                            self.emit("   drem\n")
                         
                         self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                     
-                    # Exponenciação (**=)
                     elif op.POWEQ():
-                        # x está na pilha (base), valor direito em temp (expoente)
                         self.emit("   checkcast java/lang/Number\n")
                         self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                         self.emit(f"   aload {idx_temp}\n")
@@ -979,25 +1057,21 @@ class GeradorCodigo(LinguagemListener):
                         self.emit("   invokestatic java/lang/Math/pow(DD)D\n")
                         self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                     
-                    # Guarda o resultado na variável
                     self.emit(f"   astore {info['index']}\n")
 
     def exitEqualityExpression(self, ctx):
         if ctx.EQ() or ctx.SEQ() or ctx.NE() or ctx.SNE():
-            is_loose = ctx.EQ() or ctx.NE()  # == ou != (loose)
-            is_strict = ctx.SEQ() or ctx.SNE()  # === ou !== (strict)
-            is_negated = ctx.NE() or ctx.SNE()  # != ou !==
+            is_loose = ctx.EQ() or ctx.NE()
+            is_strict = ctx.SEQ() or ctx.SNE()
+            is_negated = ctx.NE() or ctx.SNE()
             
             idx_temp1 = self.next_var_index + 60
             idx_temp2 = self.next_var_index + 61
             
-            # Salva os operandos
-            self.emit(f"   astore {idx_temp2}\n")  # operando direito
-            self.emit(f"   astore {idx_temp1}\n")  # operando esquerdo
+            self.emit(f"   astore {idx_temp2}\n")
+            self.emit(f"   astore {idx_temp1}\n")
             
             if is_loose:
-                # Comparação loose (==) - com coerção de tipos
-                lbl_both_numbers = self.get_next_label()
                 lbl_string_to_num1 = self.get_next_label()
                 lbl_string_to_num2 = self.get_next_label()
                 lbl_use_equals = self.get_next_label()
@@ -1005,7 +1079,6 @@ class GeradorCodigo(LinguagemListener):
                 lbl_false = self.get_next_label()
                 lbl_end = self.get_next_label()
                 
-                # Verifica se temp1 é Number e temp2 é String
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   instanceof java/lang/Number\n")
                 self.emit(f"   ifeq {lbl_string_to_num2}\n")
@@ -1013,10 +1086,8 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   instanceof java/lang/String\n")
                 self.emit(f"   ifeq {lbl_string_to_num2}\n")
                 
-                # temp1 é Number, temp2 é String - converte String para Number e compara
                 self.emit(f"   goto {lbl_string_to_num1}\n")
                 
-                # Verifica se temp1 é String e temp2 é Number
                 self.emit(f"{lbl_string_to_num2}:\n")
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   instanceof java/lang/String\n")
@@ -1025,15 +1096,12 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   instanceof java/lang/Number\n")
                 self.emit(f"   ifeq {lbl_use_equals}\n")
                 
-                # temp1 é String, temp2 é Number - converte String para Number
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   checkcast java/lang/String\n")
                 self.emit("   invokestatic java/lang/Double/parseDouble(Ljava/lang/String;)D\n")
-                
                 self.emit(f"   aload {idx_temp2}\n")
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-                
                 self.emit("   dcmpl\n")
                 
                 if is_negated:
@@ -1042,16 +1110,13 @@ class GeradorCodigo(LinguagemListener):
                     self.emit(f"   ifeq {lbl_true}\n")
                 self.emit(f"   goto {lbl_false}\n")
                 
-                # Caso: temp1 é Number, temp2 é String
                 self.emit(f"{lbl_string_to_num1}:\n")
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-                
                 self.emit(f"   aload {idx_temp2}\n")
                 self.emit("   checkcast java/lang/String\n")
                 self.emit("   invokestatic java/lang/Double/parseDouble(Ljava/lang/String;)D\n")
-                
                 self.emit("   dcmpl\n")
                 
                 if is_negated:
@@ -1060,7 +1125,6 @@ class GeradorCodigo(LinguagemListener):
                     self.emit(f"   ifeq {lbl_true}\n")
                 self.emit(f"   goto {lbl_false}\n")
                 
-                # Usa equals() para outros casos
                 self.emit(f"{lbl_use_equals}:\n")
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit(f"   aload {idx_temp2}\n")
@@ -1082,7 +1146,6 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
                 
             else:
-                # Comparação strict (===) - sem coerção
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit(f"   aload {idx_temp2}\n")
                 self.emit("   invokevirtual java/lang/Object/equals(Ljava/lang/Object;)Z\n")
@@ -1102,67 +1165,18 @@ class GeradorCodigo(LinguagemListener):
                 self.emit(f"{lbl_end}:\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
-    def exitConditionalExpression(self, ctx):
-        # conditionalExpression: logicalOrExpression (QUESTION expression COLON assignmentExpression)?
-        if ctx.QUESTION() and ctx.COLON():
-            # Neste ponto a pilha tem: [condiÃ§Ã£o, valor_se_true, valor_se_false]
-            # Precisamos reorganizar para avaliar a condiÃ§Ã£o primeiro
-            
-            idx_false_val = self.next_var_index + 90
-            idx_true_val = self.next_var_index + 91
-            idx_condition = self.next_var_index + 92
-            
-            lbl_true = self.get_next_label()
-            lbl_false = self.get_next_label()
-            lbl_end = self.get_next_label()
-            
-            # Salva os valores (ordem: false, true, condiÃ§Ã£o)
-            self.emit(f"   astore {idx_false_val}\n")   # valor se falso (Ãºltimo avaliado)
-            self.emit(f"   astore {idx_true_val}\n")    # valor se verdadeiro
-            self.emit(f"   astore {idx_condition}\n")   # condiÃ§Ã£o
-            
-            # Avalia a condiÃ§Ã£o
-            self.emit(f"   aload {idx_condition}\n")
-            
-            # Verifica se Ã© null (falsy)
-            self.emit(f"   ifnull {lbl_false}\n")
-            
-            # Verifica se Ã© Number
-            self.emit(f"   aload {idx_condition}\n")
-            self.emit("   instanceof java/lang/Number\n")
-            self.emit(f"   ifeq {lbl_true}\n")  # Se nÃ£o Ã© Number, assume truthy
-            
-            # Ã‰ Number - verifica se Ã© diferente de 0
-            self.emit(f"   aload {idx_condition}\n")
-            self.emit("   checkcast java/lang/Number\n")
-            self.emit("   invokevirtual java/lang/Number/intValue()I\n")
-            self.emit(f"   ifne {lbl_true}\n")  # Se != 0, vai para true
-            
-            # CondiÃ§Ã£o Ã© falsa - retorna valor false
-            self.emit(f"{lbl_false}:\n")
-            self.emit(f"   aload {idx_false_val}\n")
-            self.emit(f"   goto {lbl_end}\n")
-            
-            # CondiÃ§Ã£o Ã© verdadeira - retorna valor true
-            self.emit(f"{lbl_true}:\n")
-            self.emit(f"   aload {idx_true_val}\n")
-            
-            self.emit(f"{lbl_end}:\n")
-
+    # Operadores bitwise e lógicos (mantidos iguais)
     def exitBitwiseAndExpression(self, ctx):
         if ctx.B_AND():
             num_ops = len(ctx.B_AND())
             for _ in range(num_ops):
                 idx_temp = self.next_var_index + 20
-                # Segundo operando
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   istore {idx_temp}\n")
-                # Primeiro operando
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   iload {idx_temp}\n")
-                # Operação AND
                 self.emit("   iand\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
@@ -1171,15 +1185,12 @@ class GeradorCodigo(LinguagemListener):
             num_ops = len(ctx.B_OR())
             for _ in range(num_ops):
                 idx_temp = self.next_var_index + 20
-                # Segundo operando
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   istore {idx_temp}\n")
-                # Primeiro operando
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   iload {idx_temp}\n")
-                # Operação OR
                 self.emit("   ior\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
@@ -1188,15 +1199,12 @@ class GeradorCodigo(LinguagemListener):
             num_ops = len(ctx.CARET())
             for _ in range(num_ops):
                 idx_temp = self.next_var_index + 20
-                # Segundo operando
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   istore {idx_temp}\n")
-                # Primeiro operando
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   iload {idx_temp}\n")
-                # Operação XOR
                 self.emit("   ixor\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
@@ -1205,79 +1213,17 @@ class GeradorCodigo(LinguagemListener):
             num_ops = len(ctx.LSHIFT()) if ctx.LSHIFT() else len(ctx.RSHIFT())
             for i in range(num_ops):
                 idx_temp = self.next_var_index + 20
-                # Segundo operando (quantidade de bits)
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   istore {idx_temp}\n")
-                # Primeiro operando (valor)
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   iload {idx_temp}\n")
-                # Operação shift
                 if ctx.LSHIFT():
-                    self.emit("   ishl\n")  # shift left
+                    self.emit("   ishl\n")
                 else:
-                    self.emit("   ishr\n")  # shift right (aritmético)
+                    self.emit("   ishr\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
-
-    # 1. OPERADOR NOT (!) - Negação Lógica
-    def exitUnaryExpression(self, ctx):
-       
-        if ctx.MINUS():
-                # O valor (seja variável, número ou expressão) JÁ ESTÁ na pilha.
-                # Ex: [..., 42]
-                
-                # 1. Converte o topo para double primitivo (Unboxing seguro)
-                self.emit("   checkcast java/lang/Number\n")
-                self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-                
-                # 2. Inverte o sinal (42.0 -> -42.0)
-                self.emit("   dneg\n")
-                
-                # 3. Empacota de volta para Objeto (Box)
-                self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
-                return
-            
-        # ADICIONE ESTE BLOCO para o operador NOT (!):
-        if ctx.BANG():
-            # O valor já está na pilha
-            idx_temp = self.next_var_index + 75
-            lbl_is_zero = self.get_next_label()
-            lbl_is_null = self.get_next_label()
-            lbl_true = self.get_next_label()
-            lbl_false = self.get_next_label()
-            lbl_end = self.get_next_label()
-            
-            self.emit(f"   astore {idx_temp}\n")
-            self.emit(f"   aload {idx_temp}\n")
-            
-            # Verifica se é null/undefined
-            self.emit(f"   ifnull {lbl_true}\n")  # null é falsy, !null = true
-            
-            # Verifica se é Number
-            self.emit(f"   aload {idx_temp}\n")
-            self.emit("   instanceof java/lang/Number\n")
-            self.emit(f"   ifeq {lbl_false}\n")  # Se não é Number, assume truthy
-            
-            # É Number - verifica se é 0
-            self.emit(f"   aload {idx_temp}\n")
-            self.emit("   checkcast java/lang/Number\n")
-            self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-            self.emit("   dconst_0\n")
-            self.emit("   dcmpl\n")
-            self.emit(f"   ifeq {lbl_true}\n")  # 0 é falsy, !0 = true
-            
-            # Não é 0 nem null - é truthy, !truthy = false
-            self.emit(f"{lbl_false}:\n")
-            self.emit("   iconst_0\n")
-            self.emit(f"   goto {lbl_end}\n")
-            
-            # É 0 ou null - é falsy, !falsy = true
-            self.emit(f"{lbl_true}:\n")
-            self.emit("   iconst_1\n")
-            
-            self.emit(f"{lbl_end}:\n")
-            self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
     def exitLogicalAndExpression(self, ctx):
         if ctx.AND():
@@ -1287,18 +1233,14 @@ class GeradorCodigo(LinguagemListener):
                 idx_temp2 = self.next_var_index + 77
                 lbl_check_second = self.get_next_label()
                 lbl_return_first = self.get_next_label()
-                lbl_return_second = self.get_next_label()
                 lbl_end = self.get_next_label()
                 
-                # Salva ambos operandos
-                self.emit(f"   astore {idx_temp2}\n")  # segundo operando
-                self.emit(f"   astore {idx_temp1}\n")  # primeiro operando
+                self.emit(f"   astore {idx_temp2}\n")
+                self.emit(f"   astore {idx_temp1}\n")
                 
-                # Verifica se o primeiro é falsy
                 self.emit(f"   aload {idx_temp1}\n")
-                self.emit(f"   ifnull {lbl_return_first}\n")  # null é falsy
+                self.emit(f"   ifnull {lbl_return_first}\n")
                 
-                # Verifica se é Number igual a 0
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   instanceof java/lang/Number\n")
                 self.emit(f"   ifeq {lbl_check_second}\n")
@@ -1308,14 +1250,12 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                 self.emit("   dconst_0\n")
                 self.emit("   dcmpl\n")
-                self.emit(f"   ifeq {lbl_return_first}\n")  # Se é 0, retorna primeiro (falsy)
+                self.emit(f"   ifeq {lbl_return_first}\n")
                 
-                # Primeiro é truthy - retorna segundo
                 self.emit(f"{lbl_check_second}:\n")
                 self.emit(f"   aload {idx_temp2}\n")
                 self.emit(f"   goto {lbl_end}\n")
                 
-                # Primeiro é falsy - retorna primeiro
                 self.emit(f"{lbl_return_first}:\n")
                 self.emit(f"   aload {idx_temp1}\n")
                 
@@ -1329,77 +1269,63 @@ class GeradorCodigo(LinguagemListener):
                 idx_temp2 = self.next_var_index + 79
                 lbl_check_second = self.get_next_label()
                 lbl_return_first = self.get_next_label()
-                lbl_return_second = self.get_next_label()
                 lbl_end = self.get_next_label()
                 
-                # Salva ambos operandos
-                self.emit(f"   astore {idx_temp2}\n")  # segundo operando
-                self.emit(f"   astore {idx_temp1}\n")  # primeiro operando
+                self.emit(f"   astore {idx_temp2}\n")
+                self.emit(f"   astore {idx_temp1}\n")
                 
-                # Verifica se o primeiro é truthy
                 self.emit(f"   aload {idx_temp1}\n")
-                self.emit(f"   ifnull {lbl_check_second}\n")  # null é falsy, testa segundo
+                self.emit(f"   ifnull {lbl_check_second}\n")
                 
-                # Verifica se é Number diferente de 0
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   instanceof java/lang/Number\n")
-                self.emit(f"   ifeq {lbl_return_first}\n")  # Não é Number, assume truthy
+                self.emit(f"   ifeq {lbl_return_first}\n")
                 
                 self.emit(f"   aload {idx_temp1}\n")
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                 self.emit("   dconst_0\n")
                 self.emit("   dcmpl\n")
-                self.emit(f"   ifne {lbl_return_first}\n")  # Se não é 0, retorna primeiro (truthy)
+                self.emit(f"   ifne {lbl_return_first}\n")
                 
-                # Primeiro é falsy - retorna segundo
                 self.emit(f"{lbl_check_second}:\n")
                 self.emit(f"   aload {idx_temp2}\n")
                 self.emit(f"   goto {lbl_end}\n")
                 
-                # Primeiro é truthy - retorna primeiro
                 self.emit(f"{lbl_return_first}:\n")
                 self.emit(f"   aload {idx_temp1}\n")
                 
                 self.emit(f"{lbl_end}:\n")
 
-    # ---------------------------
-    # Suporte a objetos e arrays
-    # ---------------------------
-    # -----------------------------------------------------------
-    # CORREÇÃO DE ARRAYS E OBJETOS (Usa variável temporária)
-    # -----------------------------------------------------------
     def exitArrayLiteral(self, ctx):
-        # A pilha contém os valores dos elementos: [Val1, Val2, Val3...]
-        # O topo é o último elemento.
-        
-        # 1. Cria o ArrayList
         self.emit("   new java/util/ArrayList\n")
         self.emit("   dup\n")
         self.emit("   invokespecial java/util/ArrayList/<init>()V\n")
         
-        # 2. Salva o ArrayList numa variável temporária para não perder a referência
         idx_list = self.next_var_index + 100
         self.emit(f"   astore {idx_list}\n")
         
-        # 3. Adiciona os itens (iterando de trás para frente, pois é Pilha LIFO)
+        # CORREÇÃO: Processar expressões na ordem correta
         if ctx.expression():
-            exprs = ctx.expression()
-            for _ in reversed(exprs):
-                # A pilha tem o valor no topo. 
-                # Precisamos carregar a lista, fazer swap e adicionar.
-                
-                self.emit(f"   aload {idx_list}\n") # Stack: [Valor, Lista]
-                self.emit("   swap\n")              # Stack: [Lista, Valor]
-                self.emit("   invokeinterface java/util/List/add(Ljava/lang/Object;)Z 2\n") # Stack: [boolean]
-                self.emit("   pop\n")               # Stack: [] (Limpa o retorno do add)
+            exprs = list(ctx.expression())
+            num_exprs = len(exprs)
+            
+            # Guarda valores em ordem REVERSA (pilha é LIFO)
+            for i in range(num_exprs - 1, -1, -1):
+                idx = self.next_var_index + 110 + i
+                self.emit(f"   astore {idx}\n")
+            
+            # Adiciona na lista em ordem NORMAL (0, 1, 2...)
+            for i in range(num_exprs):
+                idx = self.next_var_index + 110 + i
+                self.emit(f"   aload {idx_list}\n")
+                self.emit(f"   aload {idx}\n")
+                self.emit("   invokeinterface java/util/List/add(Ljava/lang/Object;)Z 2\n")
+                self.emit("   pop\n")
         
-        # 4. Devolve o ArrayList para a pilha principal
         self.emit(f"   aload {idx_list}\n")
 
     def exitObjectLiteral(self, ctx):
-        # A pilha contém os valores: [Val1, Val2...]
-        
         self.emit("   new java/util/HashMap\n")
         self.emit("   dup\n")
         self.emit("   invokespecial java/util/HashMap/<init>()V\n")
@@ -1407,31 +1333,28 @@ class GeradorCodigo(LinguagemListener):
         idx_map = self.next_var_index + 101
         self.emit(f"   astore {idx_map}\n")
         
-        # Itera propriedades de trás para frente (LIFO)
-        # IMPORTANTE: Certifique-se que sua gramática usa 'objProp' ou o nome correto
-        if ctx.objProp(): 
+        # CORREÇÃO: Processar propriedades na ordem correta
+        if ctx.objProp():
             props = list(ctx.objProp())
-            for prop in reversed(props):
+            num_props = len(props)
+            
+            # Guarda valores em ordem REVERSA
+            for i in range(num_props - 1, -1, -1):
+                idx_val = self.next_var_index + 110 + i
+                self.emit(f"   astore {idx_val}\n")
+            
+            # Adiciona no HashMap em ordem NORMAL
+            for i, prop in enumerate(props):
                 key = prop.Identifier().getText()
+                idx_val = self.next_var_index + 110 + i
                 
-                # Stack tem: [Valor]
-                self.emit(f"   aload {idx_map}\n") # Stack: [Valor, Map]
-                self.emit("   swap\n")              # Stack: [Map, Valor]
-                self.emit(f'   ldc "{key}"\n')      # Stack: [Map, Valor, Key]
-                self.emit("   swap\n")              # Stack: [Map, Key, Valor] (Ordem correta para put)
+                self.emit(f"   aload {idx_map}\n")
+                self.emit(f'   ldc "{key}"\n')
+                self.emit(f"   aload {idx_val}\n")
                 self.emit("   invokevirtual java/util/HashMap/put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n")
-                self.emit("   pop\n")               # Remove retorno do put
+                self.emit("   pop\n")
         
         self.emit(f"   aload {idx_map}\n")
+# ============= FIM DO ARQUIVO =============
 
-    def exitMemberIndexExpression(self, ctx):
-        # pilha: [lista, índice]
-        # precisamos garantir ordem: lista, índice -> get(I)
-        # convert index to int
-        self.emit("   checkcast java/lang/Number\n")
-        self.emit("   invokevirtual java/lang/Number/intValue()I\n")
-        # lista must be under the int, so swap if necessary is complex;
-        # assumimos padrão gerado pelo parser é [lista, índice] (lista embaixo, índice no topo)
-        # convert list and call get
-        self.emit("   checkcast java/util/List\n")
-        self.emit("   invokeinterface java/util/List/get(I)Ljava/lang/Object; 2\n")
+
