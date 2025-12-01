@@ -1127,6 +1127,54 @@ class GeradorCodigo(LinguagemListener):
             self.emit(f"{lbl_end}:\n")
             self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
+    # --- OPERADOR TERNÃRIO (? :) ---
+    def exitConditionalExpression(self, ctx):
+        # conditionalExpression: logicalOrExpression (QUESTION expression COLON assignmentExpression)?
+        if ctx.QUESTION() and ctx.COLON():
+            # Neste ponto a pilha tem: [condiÃ§Ã£o, valor_se_true, valor_se_false]
+            # Precisamos reorganizar para avaliar a condiÃ§Ã£o primeiro
+            
+            idx_false_val = self.next_var_index + 90
+            idx_true_val = self.next_var_index + 91
+            idx_condition = self.next_var_index + 92
+            
+            lbl_true = self.get_next_label()
+            lbl_false = self.get_next_label()
+            lbl_end = self.get_next_label()
+            
+            # Salva os valores (ordem: false, true, condiÃ§Ã£o)
+            self.emit(f"   astore {idx_false_val}\n")   # valor se falso (Ãºltimo avaliado)
+            self.emit(f"   astore {idx_true_val}\n")    # valor se verdadeiro
+            self.emit(f"   astore {idx_condition}\n")   # condiÃ§Ã£o
+            
+            # Avalia a condiÃ§Ã£o
+            self.emit(f"   aload {idx_condition}\n")
+            
+            # Verifica se Ã© null (falsy)
+            self.emit(f"   ifnull {lbl_false}\n")
+            
+            # Verifica se Ã© Number
+            self.emit(f"   aload {idx_condition}\n")
+            self.emit("   instanceof java/lang/Number\n")
+            self.emit(f"   ifeq {lbl_true}\n")  # Se nÃ£o Ã© Number, assume truthy
+            
+            # Ã‰ Number - verifica se Ã© diferente de 0
+            self.emit(f"   aload {idx_condition}\n")
+            self.emit("   checkcast java/lang/Number\n")
+            self.emit("   invokevirtual java/lang/Number/intValue()I\n")
+            self.emit(f"   ifne {lbl_true}\n")  # Se != 0, vai para true
+            
+            # CondiÃ§Ã£o Ã© falsa - retorna valor false
+            self.emit(f"{lbl_false}:\n")
+            self.emit(f"   aload {idx_false_val}\n")
+            self.emit(f"   goto {lbl_end}\n")
+            
+            # CondiÃ§Ã£o Ã© verdadeira - retorna valor true
+            self.emit(f"{lbl_true}:\n")
+            self.emit(f"   aload {idx_true_val}\n")
+            
+            self.emit(f"{lbl_end}:\n")
+
     # --- OPERADORES BITWISE ---
     def exitBitwiseAndExpression(self, ctx):
         if ctx.B_AND():

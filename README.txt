@@ -21,18 +21,25 @@ Discentes: Bernardo de Carvalho Cavalcante e Francisco Rafael Meneses Gonçalves
         (Caso seja necessário regenerar os analisadores a partir da gramática, certifique-se de ter a ferramenta ANTLR4 instalada e execute: antlr4 -Dlanguage=Python3 Linguagem.g4)
 
 ## 3. Como Executar
-    O compilador recebe o caminho do arquivo-fonte como argumento na linha de comando.
+    ### Front end
+        O compilador recebe o caminho do arquivo-fonte como argumento na linha de comando.
 
-    - Se for um arquivo individual, passe o caminho para o arquivo:
-        python main.py exemplos_especificacao/acertos/declaracao_variavel.txt
+        - Se for um arquivo individual, passe o caminho para o arquivo:
+            python main.py exemplos_especificacao/acertos/declaracao_variavel.txt
 
-    - Se for uma pasta, o compilador processará todos os arquivos da pasta. Exemplo:
-        python main.py exemplos_especificacao/acertos
+        - Se for uma pasta, o compilador processará todos os arquivos' da pasta. Exemplo:
+            python main.py exemplos_especificacao/acertos
 
-    Saída esperada:
-        Compilado com sucesso.
-        ou
-        [Erro semantico/sintatico/lexico informando qual linha ocorreu esse erro]
+        Saída esperada:
+            Compilado com sucesso.
+            ou
+            [Erro semantico/sintatico/lexico informando qual linha ocorreu esse erro]
+
+    ### Back end
+        Exemplo:
+            - python main.py exemplos_especificacao/do_while
+            - java -jar jasmin.jar do_while.j
+            - java do_while
 
 ## 4. Testes e Validação
     O projeto inclui duas baterias de testes na pasta exemplos_especificacao/  e exemplos_novos/, ambos divididas em casos de sucesso (acertos) e casos de falha (erros).
