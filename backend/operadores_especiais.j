@@ -118,12 +118,15 @@ L14:
    aload 103
    astore 2
    aload 2
+   checkcast java/util/Map
+   ldc "idade"
+   invokeinterface java/util/Map/remove(Ljava/lang/Object;)Ljava/lang/Object; 2
    pop
    iconst_1
    invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;
    pop
    getstatic java/lang/System/out Ljava/io/PrintStream;
-   ldc "nome"
+   ldc "idade"
    aload 2
    checkcast java/util/Map
    swap
@@ -135,6 +138,21 @@ L14:
 L17:
    iconst_1
 L18:
+   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;
+   invokevirtual java/io/PrintStream/println(Ljava/lang/Object;)V
+   getstatic java/lang/System/out Ljava/io/PrintStream;
+   ldc "nome"
+   aload 2
+   checkcast java/util/Map
+   swap
+   checkcast java/lang/Object
+   invokeinterface java/util/Map/containsKey(Ljava/lang/Object;)Z 2
+   ifne L19
+   iconst_0
+   goto L20
+L19:
+   iconst_1
+L20:
    invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;
    invokevirtual java/io/PrintStream/println(Ljava/lang/Object;)V
    ldc "Maria"
@@ -163,9 +181,49 @@ L18:
    astore 3
    getstatic java/lang/System/out Ljava/io/PrintStream;
    aload 3
+   dup
+   ifnull L21
+   checkcast java/util/Map
+   ldc "perfil"
+   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2
+   goto L22
+L21:
+   pop
+   aconst_null
+L22:
+   dup
+   ifnull L23
+   checkcast java/util/Map
+   ldc "nome"
+   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2
+   goto L24
+L23:
+   pop
+   aconst_null
+L24:
    invokevirtual java/io/PrintStream/println(Ljava/lang/Object;)V
    getstatic java/lang/System/out Ljava/io/PrintStream;
    aload 3
+   dup
+   ifnull L25
+   checkcast java/util/Map
+   ldc "contato"
+   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2
+   goto L26
+L25:
+   pop
+   aconst_null
+L26:
+   dup
+   ifnull L27
+   checkcast java/util/Map
+   ldc "email"
+   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2
+   goto L28
+L27:
+   pop
+   aconst_null
+L28:
    invokevirtual java/io/PrintStream/println(Ljava/lang/Object;)V
    return
 .end method

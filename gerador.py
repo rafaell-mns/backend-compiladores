@@ -34,6 +34,10 @@ class GeradorCodigo(LinguagemListener):
         # NOVO: Flag para retorno implícito de Arrow Function
         self.is_arrow_return = False
 
+        # --- NOVO: CONTROLE DE DELETE ---
+        self.pending_delete = False      # Indica que estamos dentro de um "delete ..."
+        self.delete_handled = False      # Indica se o delete foi consumido com sucesso por um objeto
+
     def get_codigo(self):
         full_code = f".class public {self.nome_classe}\n"
         full_code += ".super java/lang/Object\n\n"
@@ -486,101 +490,50 @@ class GeradorCodigo(LinguagemListener):
     # POSTFIX OPERATIONS
     # -----------------------------------------------------------
     def exitPostfixOp(self, ctx):
+        # -----------------------------------------------------------
+        # 1. CHAMADAS DE FUNÇÃO: parseInt, Math, substring, etc.
+        # -----------------------------------------------------------
         if ctx.LPAREN():
             parent = ctx.parentCtx
             texto_completo = parent.getText()
             
+            # --- parseInt ---
             if "parseInt(" in texto_completo:
                 idx_temp = self.next_var_index + 80
-                lbl_is_string = self.get_next_label()
                 lbl_is_number = self.get_next_label()
                 lbl_end = self.get_next_label()
-                
                 self.emit(f"   astore {idx_temp}\n")
                 self.emit(f"   aload {idx_temp}\n")
                 self.emit("   instanceof java/lang/Number\n")
                 self.emit(f"   ifne {lbl_is_number}\n")
-                
                 self.emit(f"   aload {idx_temp}\n")
                 self.emit("   checkcast java/lang/String\n")
                 self.emit("   invokestatic java/lang/Double/parseDouble(Ljava/lang/String;)D\n")
                 self.emit("   d2i\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
                 self.emit(f"   goto {lbl_end}\n")
-                
                 self.emit(f"{lbl_is_number}:\n")
                 self.emit(f"   aload {idx_temp}\n")
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
-                
                 self.emit(f"{lbl_end}:\n")
                 return
-        
+
+            # --- parseFloat ---
             if "parseFloat(" in texto_completo:
-                idx_temp = self.next_var_index + 81
-                lbl_is_string = self.get_next_label()
-                lbl_is_number = self.get_next_label()
-                lbl_end = self.get_next_label()
-                
-                self.emit(f"   astore {idx_temp}\n")
-                self.emit(f"   aload {idx_temp}\n")
-                self.emit("   instanceof java/lang/Number\n")
-                self.emit(f"   ifne {lbl_is_number}\n")
-                
-                self.emit(f"   aload {idx_temp}\n")
                 self.emit("   checkcast java/lang/String\n")
                 self.emit("   invokestatic java/lang/Double/parseDouble(Ljava/lang/String;)D\n")
                 self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
-                self.emit(f"   goto {lbl_end}\n")
-                
-                self.emit(f"{lbl_is_number}:\n")
-                self.emit(f"   aload {idx_temp}\n")
-                self.emit("   checkcast java/lang/Number\n")
-                self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-                self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
-                
-                self.emit(f"{lbl_end}:\n")
                 return
 
-            if "BigInt(" in texto_completo:
-                idx_temp = self.next_var_index + 82
-                lbl_is_string = self.get_next_label()
-                lbl_is_number = self.get_next_label()
-                lbl_end = self.get_next_label()
-                
-                self.emit(f"   astore {idx_temp}\n")
-                self.emit(f"   aload {idx_temp}\n")
-                self.emit("   instanceof java/lang/String\n")
-                self.emit(f"   ifne {lbl_is_string}\n")
-                
-                self.emit(f"   aload {idx_temp}\n")
-                self.emit("   checkcast java/lang/Number\n")
-                self.emit("   invokevirtual java/lang/Number/longValue()J\n")
-                self.emit("   invokestatic java/lang/Long/valueOf(J)Ljava/lang/Long;\n")
-                self.emit(f"   goto {lbl_end}\n")
-                
-                self.emit(f"{lbl_is_string}:\n")
-                self.emit(f"   aload {idx_temp}\n")
-                self.emit("   checkcast java/lang/String\n")
-                self.emit("   invokestatic java/lang/Long/parseLong(Ljava/lang/String;)J\n")
-                self.emit("   invokestatic java/lang/Long/valueOf(J)Ljava/lang/Long;\n")
-                
-                self.emit(f"{lbl_end}:\n")
-                return
-
+            # --- Math.pow ---
             if "Math.pow" in texto_completo:
-                idx_b = self.next_var_index + 15
-                self.emit("   checkcast java/lang/Number\n")
-                self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-                self.emit(f"   dstore {idx_b}\n")
-                self.emit("   checkcast java/lang/Number\n")
-                self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-                self.emit(f"   dload {idx_b}\n")
                 self.emit("   invokestatic java/lang/Math/pow(DD)D\n")
                 self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                 return
 
+            # --- Math.sqrt ---
             if "Math.sqrt" in texto_completo:
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
@@ -588,19 +541,17 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                 return
             
+            # --- .toUpperCase ---
             if ".toUpperCase" in texto_completo:
                 self.emit("   checkcast java/lang/String\n")
                 self.emit("   invokevirtual java/lang/String/toUpperCase()Ljava/lang/String;\n")
                 return
 
+            # --- .substring ---
             if ".substring" in texto_completo:
                 idx_fim = self.next_var_index + 10
                 idx_inicio = self.next_var_index + 11
-                self.emit("   checkcast java/lang/Number\n")
-                self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   istore {idx_fim}\n")
-                self.emit("   checkcast java/lang/Number\n")
-                self.emit("   invokevirtual java/lang/Number/intValue()I\n")
                 self.emit(f"   istore {idx_inicio}\n")
                 self.emit("   checkcast java/lang/String\n")
                 self.emit(f"   iload {idx_inicio}\n")
@@ -608,14 +559,17 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokevirtual java/lang/String/substring(II)Ljava/lang/String;\n")
                 return
 
+            # --- Funções do Usuário ---
             if hasattr(parent, 'primaryExpression'):
                 nome_funcao = parent.primaryExpression().getText()
-                if nome_funcao in ['console', 'Math', 'parseInt', 'parseFloat', 'BigInt']: 
-                    return
-                self.emit(f"   invokestatic {self.nome_classe}/{nome_funcao}(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n")
+                ignorar = ['console', 'Math', 'parseInt', 'parseFloat', 'BigInt']
+                if nome_funcao not in ignorar:
+                    self.emit(f"   invokestatic {self.nome_classe}/{nome_funcao}(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;\n")
             return
 
-        # PÓS-INCREMENTO/DECREMENTO
+        # -----------------------------------------------------------
+        # 2. INCREMENTO / DECREMENTO (++ / --)
+        # -----------------------------------------------------------
         op = None
         if ctx.INC(): op = 'inc'
         elif ctx.DEC(): op = 'dec'
@@ -630,73 +584,99 @@ class GeradorCodigo(LinguagemListener):
                         info = self.var_map_local[nome]
                     else: 
                         info = self.var_map_main.get(nome)
-
+                    
                     if info:
-                        is_for_increment = self.capturing_increment
-                        
-                        if is_for_increment:
-                            # NO FOR: variável já está na pilha
+                        if self.capturing_increment:
                             self.emit("   checkcast java/lang/Number\n")
                             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                             self.emit("   dconst_1\n")
-                            if op == 'inc': 
-                                self.emit("   dadd\n")
-                            else: 
-                                self.emit("   dsub\n")
+                            if op == 'inc': self.emit("   dadd\n")
+                            else: self.emit("   dsub\n")
                             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                             self.emit(f"   astore {info['index']}\n")
                         else:
-                            # NORMAL: pós-incremento (retorna valor antigo)
                             idx_temp_old = self.next_var_index + 26
-                            
                             self.emit("   dup\n")
                             self.emit(f"   astore {idx_temp_old}\n")
                             self.emit("   checkcast java/lang/Number\n")
                             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                             self.emit("   dconst_1\n")
-                            if op == 'inc': 
-                                self.emit("   dadd\n")
-                            else: 
-                                self.emit("   dsub\n")
+                            if op == 'inc': self.emit("   dadd\n")
+                            else: self.emit("   dsub\n")
                             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                             self.emit(f"   astore {info['index']}\n")
                             self.emit(f"   aload {idx_temp_old}\n")
+            return
+
+        # -----------------------------------------------------------
+        # 3. ACESSO A PROPRIEDADES (. e ?.)
+        # -----------------------------------------------------------
+        if ctx.DOT() or ctx.OPTIONAL_CHAIN():
+            # CORREÇÃO CRÍTICA: Ignorar .log e .pow/.sqrt manuais
+            # Se não ignorarmos, ele tenta acessar essas propriedades no objeto System.out ou Math
+            # o que corrompe a pilha e causa VerifyError.
+            parent_txt = ctx.parentCtx.getText()
+            if parent_txt.startswith("console.") or parent_txt.startswith("Math."):
+                return
+
+            prop_name = ctx.Identifier().getText()
+            is_optional = (ctx.OPTIONAL_CHAIN() is not None)
             
-            if ctx.DOT() or ctx.OPTIONAL_CHAIN():
-                prop_name = ctx.Identifier().getText()
-                is_optional = (ctx.OPTIONAL_CHAIN() is not None)
+            # Verifica se este é o último operador (para o delete)
+            parent = ctx.parentCtx
+            is_last_op = False
+            if hasattr(parent, 'postfixOp'):
+                ops = parent.postfixOp()
+                if ops and ops[-1] is ctx:
+                    is_last_op = True
             
-            if is_optional:
-                # Lógica do Optional Chaining (?.)
-                # Pilha atual: [Objeto] (Pode ser Map ou null)
+            # === CENÁRIO A: DELETE (delete obj.prop) ===
+            if self.pending_delete and is_last_op:
+                if is_optional:
+                    lbl_is_null = self.get_next_label()
+                    lbl_end = self.get_next_label()
+                    self.emit("   dup\n")
+                    self.emit(f"   ifnull {lbl_is_null}\n")
+                    self.emit("   checkcast java/util/Map\n") 
+                    self.emit(f'   ldc "{prop_name}"\n')
+                    self.emit("   invokeinterface java/util/Map/remove(Ljava/lang/Object;)Ljava/lang/Object; 2\n") 
+                    self.emit("   pop\n")
+                    self.emit(f"   goto {lbl_end}\n")
+                    self.emit(f"{lbl_is_null}:\n")
+                    self.emit("   pop\n")
+                    self.emit(f"{lbl_end}:\n")
+                    self.emit("   iconst_1\n") 
+                    self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
+                else:
+                    self.emit("   checkcast java/util/Map\n") 
+                    self.emit(f'   ldc "{prop_name}"\n')
+                    self.emit("   invokeinterface java/util/Map/remove(Ljava/lang/Object;)Ljava/lang/Object; 2\n")
+                    self.emit("   pop\n")
+                    self.emit("   iconst_1\n") 
+                    self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
                 
+                self.delete_handled = True
+                self.pending_delete = False 
+                return
+
+            # === CENÁRIO B: ACESSO NORMAL (GET) ===
+            if is_optional:
                 lbl_is_null = self.get_next_label()
                 lbl_continue = self.get_next_label()
-                
-                self.emit("   dup\n") # Duplica para verificar se é null sem perder o valor
+                self.emit("   dup\n") 
                 self.emit(f"   ifnull {lbl_is_null}\n")
-                
-                # Se não for null, faz o acesso normal
-                self.emit("   checkcast java/util/Map\n")
+                self.emit("   checkcast java/util/Map\n") 
                 self.emit(f'   ldc "{prop_name}"\n')
                 self.emit("   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2\n")
                 self.emit(f"   goto {lbl_continue}\n")
-                
-                # Se for null/undefined
                 self.emit(f"{lbl_is_null}:\n")
-                self.emit("   pop\n")        # Remove o objeto null da pilha (o duplicado já foi consumido pelo ifnull)
-                self.emit("   aconst_null\n") # Coloca null como resultado final
-                
+                self.emit("   pop\n")       
+                self.emit("   aconst_null\n")
                 self.emit(f"{lbl_continue}:\n")
-                
             else:
-                # Acesso normal (.)
-                # Se o objeto for null aqui, o Java vai lançar NullPointerException
-                # (comportamento similar ao JS que lança TypeError)
                 self.emit("   checkcast java/util/Map\n")
                 self.emit(f'   ldc "{prop_name}"\n')
                 self.emit("   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2\n")
-            return
 
     def enterPostfixExpression(self, ctx):
         if ctx.getText().startswith("console.log"):
@@ -814,10 +794,32 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokespecial java/util/ArrayList/<init>()V\n")
 
 
+    def enterUnaryExpression(self, ctx):
+        if hasattr(ctx, 'DELETE') and ctx.DELETE():
+            self.pending_delete = True
+            self.delete_handled = False
+
     # -----------------------------------------------------------
     # CORREÇÃO: PRÉ-INCREMENTO (++x retorna NOVO valor)
     # -----------------------------------------------------------
     def exitUnaryExpression(self, ctx):
+        # --- IMPLEMENTAÇÃO DO DELETE ---
+        if hasattr(ctx, 'DELETE') and ctx.DELETE():
+            # Se o delete já foi tratado no exitPostfixOp (removeu propriedade), 
+            # apenas reseta a flag, pois o "true" já está na pilha.
+            if self.delete_handled:
+                self.delete_handled = False
+                self.pending_delete = False
+                return
+
+            # Caso contrário (ex: delete 42;), remove o valor e retorna true.
+            self.emit("   pop\n")
+            self.emit("   iconst_1\n")
+            self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
+            
+            self.pending_delete = False
+            return
+        
         # --- IMPLEMENTAÇÃO DO TYPEOF ---
         if hasattr(ctx, 'TYPEOF') and ctx.TYPEOF():
             idx_temp = self.next_var_index + 150

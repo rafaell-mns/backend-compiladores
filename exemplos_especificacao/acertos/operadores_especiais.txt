@@ -10,6 +10,7 @@ console.log(data instanceof Object); // true (todo objeto herda de Object)
 // delete - Remove propriedade de objeto
 let obj = { nome: "Ana", idade: 25 };
 delete obj.idade;
+console.log("idade" in obj); // false
 
 // in - Verifica se propriedade existe
 console.log("nome" in obj); // true
