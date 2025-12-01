@@ -1,0 +1,129 @@
+// ---------------------------------------------------------
+// 1. TESTE DE VARIÁVEIS GLOBAIS E CONSTANTES
+// ---------------------------------------------------------
+const VERSAO_SISTEMA = 1;
+let contador_erros = 0;
+var debug_ativo = true;
+
+// ---------------------------------------------------------
+// 2. TESTE DE HOISTING (CHAMADA ANTES DA DECLARAÇÃO)
+// ---------------------------------------------------------
+iniciarExecucao(VERSAO_SISTEMA); 
+
+function iniciarExecucao(versao) {
+    if (debug_ativo) {
+        console.log("Iniciando sistema versão " + versao);
+    }
+    calcularMatematica();
+}
+
+// ---------------------------------------------------------
+// 3. FUNÇÕES, RECURSÃO E BLOCOS
+// ---------------------------------------------------------
+function fatorial(n) {
+    // Teste de IF simples com retorno
+    if (n <= 1) return 1;
+    
+    // Teste de Recursão
+    return n * fatorial(n - 1);
+}
+
+function calcularMatematica() {
+    let base = 10;
+    let resultado = 0;
+
+    // Teste de escopo: 'i' só existe dentro do for
+    for (let i = 0; i < 5; i++) {
+        // Teste de Operadores de Atribuição (+=) e Aritmética
+        resultado += base * i;
+        
+        if (i == 3) {
+            console.log("Iteração crítica encontrada");
+            continue; // Teste de Continue
+        }
+    }
+
+    let fat5 = fatorial(5);
+    console.log(fat5);
+}
+
+// ---------------------------------------------------------
+// 4. ESTRUTURAS DE CONTROLE (SWITCH / WHILE)
+// ---------------------------------------------------------
+function verificarStatus(codigo) {
+    let mensagem;
+
+    // Teste de Switch Case
+    switch (codigo) {
+        case 200:
+            mensagem = "Sucesso";
+            break; // Teste de Break
+        case 404:
+            mensagem = "Não encontrado";
+            break;
+        default:
+            mensagem = "Erro desconhecido";
+    }
+
+    // Teste de While
+    let tentativas = 0;
+    while (tentativas < 3) {
+        tentativas++;
+    }
+
+    return mensagem;
+}
+
+// ---------------------------------------------------------
+// 5. ARROW FUNCTIONS E EXPRESSÕES COMPLEXAS
+// ---------------------------------------------------------
+const calcularMedia = (a, b) => {
+    let soma = a + b;
+    return soma / 2;
+};
+
+// Arrow function simplificada (expression body)
+const dobro = (x) => x * 2;
+
+function testeExpressoes() {
+    let a = 10;
+    let b = 20;
+    let c = 30;
+
+    // Teste de precedência e operadores lógicos/relacionais
+    // ((a + b) > c) AND (true OR false)
+    let complexo = (a + b) > c && true || false;
+
+    // Teste de ternário
+    let status = complexo ? "Aprovado" : "Reprovado";
+    
+    // Teste de Arrays e Objetos (Sintaxe)
+    let lista = [1, 2, 3];
+    let obj = {
+        id: 1,
+        nome: "Teste"
+    };
+    
+    // Seu semântico ignora validação interna de objetos/arrays, mas o parser deve aceitar
+    lista[0] = 99; 
+    obj.nome = "Alterado";
+}
+
+// ---------------------------------------------------------
+// 6. TESTE DE ESCOPO (SHADOWING)
+// Uma variável interna com mesmo nome da externa
+// ---------------------------------------------------------
+function testeEscopo() {
+    let x = 100; // Local da função
+    
+    if (true) {
+        let x = 200; // Local do bloco IF (Shadowing)
+        console.log(x); // Deve ser 200
+    }
+    
+    console.log(x); // Deve ser 100
+}
+
+// Executa as funções restantes
+testeExpressoes();
+testeEscopo();

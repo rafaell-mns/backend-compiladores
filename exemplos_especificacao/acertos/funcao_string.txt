@@ -1,0 +1,5 @@
+let msg = "JavaScript";
+msg = msg.toUpperCase(); // "JAVASCRIPT"
+console.log(msg);
+msg = msg.substring(0, 4); // "JAVA"
+console.log(msg);

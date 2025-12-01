@@ -1,0 +1,5 @@
+// Exemplos inválidos
+
+let 1nome;   // começa com número
+let  let;   // palavra reservada
+let @valor;  // caractere inválido

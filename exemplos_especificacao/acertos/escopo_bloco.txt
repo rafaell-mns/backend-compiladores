@@ -1,0 +1,7 @@
+if (true) {
+    let x = 10;
+    const y = 20;
+}
+
+// console.log(x); // Erro: x não é definido
+// console.log(y); // Erro: y não é definido 

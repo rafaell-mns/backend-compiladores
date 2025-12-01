@@ -1,0 +1,5 @@
+let x = Math.pow(2, 3); // 8 (Exponenciação)
+let y = Math.sqrt(16); // 4 (Raiz quadrada)
+
+console.log(x);
+console.log(y);

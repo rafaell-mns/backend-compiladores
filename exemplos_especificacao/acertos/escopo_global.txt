@@ -1,0 +1,13 @@
+let mensagemGlobal = "Sistema Online"; // Variável no escopo global
+
+function exibirMensagem() {
+    // Acessando a variável global dentro de uma funcao
+    console.log(mensagemGlobal);
+}
+
+if (true) {
+    // Acessando a variável global dentro de um bloco
+    console.log(mensagemGlobal);
+}
+
+console.log(mensagemGlobal); // Acessível aqui também

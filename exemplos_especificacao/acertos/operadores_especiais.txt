@@ -1,0 +1,20 @@
+// typeof - Verifica o tipo
+console.log(typeof 42); // "number"
+
+// instanceof - Verifica a instância
+let data = new Date();
+console.log(data instanceof Date); // true
+console.log(data instanceof Array); // false
+console.log(data instanceof Object); // true (todo objeto herda de Object)
+
+// delete - Remove propriedade de objeto
+let obj = { nome: "Ana", idade: 25 };
+delete obj.idade;
+
+// in - Verifica se propriedade existe
+console.log("nome" in obj); // true
+
+// Optional chaining (?.) - acessar propriedades sem quebrar o código se algo no meio não existir
+let usuario = { perfil: { nome: "Maria" } };
+console.log(usuario?.perfil?.nome); // "Maria"
+console.log(usuario?.contato?.email); // undefined - contato não existe, então ele PARA ali e só retorna undefined em vez de dar erro tipo Cannot read property 'email' of undefined)

@@ -1,0 +1,4 @@
+function testar() {
+ var z = 30;
+}
+console.log(z); // Erro: z não é definido

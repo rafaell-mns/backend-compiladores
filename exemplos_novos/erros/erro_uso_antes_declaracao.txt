@@ -1,0 +1,4 @@
+// ERRO ESPERADO: Variável 'teste' não declarada
+console.log(teste);
+
+let teste = "Agora existo";

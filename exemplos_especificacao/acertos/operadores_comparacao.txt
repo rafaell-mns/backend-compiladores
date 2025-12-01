@@ -1,0 +1,5 @@
+console.log(10 > 5); // true
+console.log(10 < 5); // false
+console.log(10 == "10"); // true (igualdade solta)
+console.log(10 === 10); // true (igualdade estrita)
+console.log(10 !== 5); // true

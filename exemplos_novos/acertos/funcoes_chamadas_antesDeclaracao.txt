@@ -1,0 +1,9 @@
+function y(){
+    let w = x();
+    return w;
+}
+
+
+function x(){
+    return 10 + 25 - 30;
+}

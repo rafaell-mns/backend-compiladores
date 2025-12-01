@@ -1,0 +1,5 @@
+let textoNum = "10.5";
+let inteiro = parseInt(textoNum); // 10
+console.log(inteiro);
+let decimal = parseFloat(textoNum); // 10.5
+console.log(decimal);

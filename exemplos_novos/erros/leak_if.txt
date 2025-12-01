@@ -1,0 +1,13 @@
+// Objetivo: Garantir que variáveis declaradas dentro de um if (escopo de bloco)
+// morram quando o if acaba.
+
+function calcular() {
+    let a = 10;
+    if (a > 5) {
+        let segredo = 42;
+        console.log(segredo); // Ok
+    }
+    
+    // ERRO ESPERADO: Variável 'segredo' não declarada
+    console.log(segredo); 
+}

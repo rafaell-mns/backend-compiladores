@@ -1,0 +1,24 @@
+// Objetivo: Testar se uma variável declarada dentro de um bloco esconde (shadows)
+// a variável global com o mesmo nome, sem causar erro de "já declarada", e se o escopo
+// volta ao normal ao sair do bloco.
+
+let x = 10;
+let y = 50;
+
+function testeEscopo() {
+    let x = 20; // Válido: x local esconde x global
+    
+    if (x > 10) {
+        let x = 30; // Válido: x do if esconde x da função
+        let z = 100;
+        console.log(x); // Deve referenciar o 30
+    }
+    
+    // Aqui x deve voltar a ser 20
+    console.log(x); 
+}
+
+testeEscopo();
+// Aqui x deve ser 10
+console.log(x);
+console.log(y);

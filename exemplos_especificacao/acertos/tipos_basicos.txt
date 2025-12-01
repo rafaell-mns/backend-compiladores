@@ -1,0 +1,30 @@
+let nome = "Maria";
+console.log(nome);
+let sobrenome = "Silva";
+console.log(sobrenome);
+let mensagem = `Olá, ${nome}!`;
+console.log(mensagem);
+
+
+let idade = 25;
+console.log(idade);
+let preco = 19.99;
+console.log(preco);
+let negativo = -42;
+console.log(negativo);
+
+let ativo = true;
+console.log(ativo);
+let concluido = false;
+console.log(concluido);
+
+
+let x;
+console.log(x); // null
+let usuario = null;
+console.log(usuario);
+
+let numeroGrande = 9007199254740991n;
+console.log(numeroGrande);
+let outroGrande = BigInt("9007199254740991");
+console.log(outroGrande);

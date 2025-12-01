@@ -1,0 +1,11 @@
+function teste() {
+    let a = 10;
+    let b = 20;
+    
+    if (true) {
+        let a = 99; // Ok, sombreamento (novo escopo)
+    }
+
+    // ERRO ESPERADO: Variável 'a' já declarada neste escopo
+    // let a = 30; 
+}

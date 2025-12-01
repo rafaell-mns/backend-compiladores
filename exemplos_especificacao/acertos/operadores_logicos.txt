@@ -1,0 +1,5 @@
+let x = true, y = false;
+
+console.log(x && y); // false - AND (E lógico)
+console.log(x || y); // true - OR (OU lógico)
+console.log(!x); // false - NOT (NÃO lógico)

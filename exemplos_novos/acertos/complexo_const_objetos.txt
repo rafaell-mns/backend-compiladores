@@ -1,0 +1,18 @@
+// Objetivo: Testar a regra const impede a reatribuição
+// da variável, mas permite alterar propriedades de objetos ou elementos de arrays. 
+//o compilador deve aceitar isso 
+
+const configuracao = {
+    url: "http://api.teste.com",
+    tentativas: 3
+};
+
+// Isso É PERMITIDO semanticamente em JS e no nosso compilador
+configuracao.tentativas = 5; 
+configuracao.url = "http://nova.url.com";
+
+const lista = [1, 2, 3, "string"];
+lista[10] = 99; // Permitido
+
+let x = 10;
+x += 5; // Permitido (let)

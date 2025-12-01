@@ -1,0 +1,15 @@
+// Objetivo: Tentar enganar o compilador reatribuindo uma constante dentro de um escopo aninhado
+// ou após várias linhas.
+
+const TAXA = 0.15;
+let valor = 100;
+
+if (valor > 50) {
+    valor = valor * TAXA; // Ok, apenas LEITURA da const
+}
+
+function tentarMudar() {
+    // ERRO ESPERADO: Tentativa de reatribuir constante 'TAXA'
+    // Mesmo estando dentro de uma função, ela enxerga a const global
+    TAXA = 0.20; 
+}

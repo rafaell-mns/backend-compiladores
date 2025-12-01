@@ -1,0 +1,10 @@
+let nome = "João";
+let sobrenome = "Silva";
+
+// Concatenação
+let nomeCompleto = nome + " " + sobrenome; // "João Silva"
+console.log(nomeCompleto);
+
+// Template literals
+let mensagem = `Olá, ${nome}!`; // "Olá, João!"
+console.log(mensagem);

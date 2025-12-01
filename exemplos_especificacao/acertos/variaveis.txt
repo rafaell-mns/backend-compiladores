@@ -1,0 +1,6 @@
+// Exemplos válidos
+
+let nome;
+let _idade;
+let $valor;
+let soma1;

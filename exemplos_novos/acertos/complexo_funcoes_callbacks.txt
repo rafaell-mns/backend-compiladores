@@ -1,0 +1,26 @@
+//Objetivo: Testar misturas de Function Declaration, Arrow Function
+// e Function Expression, garantindo que os parâmetros de todas elas sejam registrados corretamente.
+
+const processar = function(valor, callback) {
+    let resultado = valor * 2;
+    return callback(resultado);
+};
+
+function formatar(n) {
+    return n + 10;
+}
+
+// Arrow function sem bloco (implícito return)
+const dobrar = (k) => k * 2;
+
+// Arrow function com bloco
+const complexo = (a, b) => {
+    let temp = a + b;
+    return temp;
+};
+
+let inicio = 5;
+processar(inicio, (res) => {
+    let final = formatar(res);
+    console.log(final);
+});

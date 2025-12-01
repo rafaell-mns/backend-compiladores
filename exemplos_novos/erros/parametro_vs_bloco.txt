@@ -1,0 +1,10 @@
+// Objetivo: Testar se parâmetros de função são visíveis apenas dentro da função.
+// Tentar acessar um parâmetro fora dela deve falhar.
+
+const somar = (valorA, valorB) => {
+    return valorA + valorB;
+};
+
+let x = 10;
+// ERRO ESPERADO: Variável 'valorA' não declarada
+console.log(valorA);

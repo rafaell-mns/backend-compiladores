@@ -1,0 +1,6 @@
+const multiplicar = (a, b) => {
+    return a * b;
+};
+
+// Forma ainda mais curta para retornos diretos
+const dividir = (a, b) => a / b;
