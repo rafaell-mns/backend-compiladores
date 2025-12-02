@@ -605,6 +605,7 @@ class GeradorCodigo(LinguagemListener):
                     
                     if info:
                         if self.capturing_increment:
+                            # Lógica para FOR loop (incremento simples)
                             self.emit("   checkcast java/lang/Number\n")
                             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                             self.emit("   dconst_1\n")
@@ -613,26 +614,40 @@ class GeradorCodigo(LinguagemListener):
                             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                             self.emit(f"   astore {info['index']}\n")
                         else:
-                            idx_temp_old = self.next_var_index + 26
-                            self.emit("   dup\n")
-                            self.emit(f"   astore {idx_temp_old}\n")
+                            # --- PÓS-INCREMENTO (x++) CORRIGIDO ---
+                            # O valor de 'x' já está na pilha (Ex: 6)
+                            
                             self.emit("   checkcast java/lang/Number\n")
+                            
+                            # 1. Duplica o valor original na pilha
+                            # Pilha: [Val_Antigo, Val_Antigo]
+                            self.emit("   dup\n") 
+                            
+                            # 2. Converte o topo para double para fazer a conta
+                            # Pilha: [Val_Antigo, double_Antigo]
                             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
+                            
+                            # 3. Adiciona/Subtrai 1
                             self.emit("   dconst_1\n")
                             if op == 'inc': self.emit("   dadd\n")
                             else: self.emit("   dsub\n")
+                            # Pilha: [Val_Antigo, double_Novo]
+                            
+                            # 4. Empacota o novo valor (Ex: 7)
+                            # Pilha: [Val_Antigo, Objeto_Novo]
                             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
+                            
+                            # 5. Salva o Objeto_Novo na variável x
+                            # O 'astore' consome o topo (Objeto_Novo), deixando o Val_Antigo na pilha
                             self.emit(f"   astore {info['index']}\n")
-                            self.emit(f"   aload {idx_temp_old}\n")
+                            
+                            # Pilha final: [Val_Antigo] -> Isso é o que o console.log vai imprimir!
             return
 
         # -----------------------------------------------------------
         # 3. ACESSO A PROPRIEDADES (. e ?.)
         # -----------------------------------------------------------
         if ctx.DOT() or ctx.OPTIONAL_CHAIN():
-            # CORREÇÃO CRÍTICA: Ignorar .log e .pow/.sqrt manuais
-            # Se não ignorarmos, ele tenta acessar essas propriedades no objeto System.out ou Math
-            # o que corrompe a pilha e causa VerifyError.
             parent_txt = ctx.parentCtx.getText()
             if parent_txt.startswith("console.") or parent_txt.startswith("Math."):
                 return
@@ -910,6 +925,8 @@ class GeradorCodigo(LinguagemListener):
             self.emit("   iconst_1\n")
             self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
             return
+        
+        # --- CORREÇÃO: PRÉ-INCREMENTO / DECREMENTO (++x / --x) ---
         if ctx.INC() or ctx.DEC():
             primeiro = ctx.getChild(1)
             if hasattr(primeiro, 'getText'):
@@ -920,41 +937,39 @@ class GeradorCodigo(LinguagemListener):
                     info = self.var_map_main.get(nome)
                 
                 if info:
-                    idx_temp = self.next_var_index + 25
-                    # CORREÇÃO: Não assumir que há valor na pilha
-                    self.emit(f"   aload {info['index']}\n")
+                    # CORREÇÃO CRÍTICA: O valor da variável JÁ ESTÁ NA PILHA
+                    # (colocado pelo enterPrimaryExpression do filho).
+                    # Não fazemos 'aload' aqui para não duplicar.
+                    
                     self.emit("   checkcast java/lang/Number\n")
                     self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                     self.emit("   dconst_1\n")
+                    
                     if ctx.INC():
-                        self.emit("   dadd\n")
+                        self.emit("   dadd\n") # Soma 1
                     else:
-                        self.emit("   dsub\n")
-                    self.emit(f"   dstore {idx_temp}\n")
-                    self.emit(f"   dload {idx_temp}\n")
+                        self.emit("   dsub\n") # Subtrai 1
+                    
+                    # Empacota o novo valor em Double
                     self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
-                    self.emit(f"   astore {info['index']}\n")
-                    # Retorna NOVO valor
-                    self.emit(f"   dload {idx_temp}\n")
-                    self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
+                    
+                    # Agora temos [NovoValor] na pilha.
+                    # Precisamos salvar na variável E deixar o valor na pilha para o console.log usar.
+                    
+                    self.emit("   dup\n") # Pilha: [NovoValor, NovoValor]
+                    self.emit(f"   astore {info['index']}\n") # Salva um na variável. Pilha: [NovoValor]
             return
 
+        # --- CORREÇÃO: TILDE (~) ---
+        # A lógica antiga do Tilde também tinha esse problema de 'aload' duplicado
+        # e só funcionava para variáveis. Vamos fazer funcionar para qualquer expressão.
         elif ctx.TILDE():
-            primeiro = ctx.getChild(1)
-            if hasattr(primeiro, 'getText'):
-                nome = primeiro.getText()
-                if self.inside_method and nome in self.var_map_local:
-                    info = self.var_map_local[nome]
-                else:
-                    info = self.var_map_main.get(nome)
-                
-                if info:
-                    self.emit(f"   aload {info['index']}\n")
-                    self.emit("   checkcast java/lang/Number\n")
-                    self.emit("   invokevirtual java/lang/Number/intValue()I\n")
-                    self.emit("   iconst_m1\n")
-                    self.emit("   ixor\n")
-                    self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
+            # O valor da expressão (seja variável ou número) já está na pilha.
+            self.emit("   checkcast java/lang/Number\n")
+            self.emit("   invokevirtual java/lang/Number/intValue()I\n")
+            self.emit("   iconst_m1\n") # Carrega -1 (que é a máscara de inversão bitwise total)
+            self.emit("   ixor\n")      # XOR com -1 inverte todos os bits (equivalente a ~)
+            self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
             return
         
         if ctx.MINUS():

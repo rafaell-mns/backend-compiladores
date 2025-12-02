@@ -10,6 +10,11 @@ console.log(a ** b); // 100000 - exponenciação
 let x = 5;
 
 console.log(++x); // pré-incremento: x vira 6 imediatamente
-console.log(x++); // pós-incremento: aqui vale 6, mas depois vira 7
+
+x++; // pós-incremento: aqui vale 6, mas depois vira 7
+console.log(x);
+
 console.log(--x); // pré-decremento: x vira 6 imediatamente
-console.log(x--); // pós-decremento: aqui vale 6, mas depois vira 5
+
+x--; // pós-decremento: aqui vale 6, mas depois vira 5
+console.log(x);
