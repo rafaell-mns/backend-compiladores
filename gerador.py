@@ -38,6 +38,9 @@ class GeradorCodigo(LinguagemListener):
         self.pending_delete = False      # Indica que estamos dentro de um "delete ..."
         self.delete_handled = False      # Indica se o delete foi consumido com sucesso por um objeto
 
+        # --- Pilha para Operador Ternário ---
+        self.ternary_stack = []
+        
     def get_codigo(self):
         full_code = f".class public {self.nome_classe}\n"
         full_code += ".super java/lang/Object\n\n"
@@ -195,6 +198,21 @@ class GeradorCodigo(LinguagemListener):
                 # Limpa o ID para não confundir com outras expressões
                 config['current_case_expr_id'] = None
                 return
+            
+        parent = ctx.parentCtx
+        # Verifica se o pai é um ternário
+        if parent and hasattr(parent, 'QUESTION') and parent.QUESTION():
+            # Verifica se somos a expressão do meio (entre ? e :)
+            # Estrutura: [Condição] ? [ExpressãoTrue] : [ExpressãoFalse]
+            # Indices:      0      1        2         3        4
+            if parent.getChild(2) is ctx:
+                config = self.ternary_stack[-1]
+                
+                # Terminamos a parte verdadeira, então GOTO FIM
+                self.emit(f"   goto {config['lbl_end']}\n")
+                
+                # Aqui começa a parte falsa (o label para onde o IFEQ lá de cima pulou)
+                self.emit(f"{config['lbl_false']}:\n")
 
     def exitForStatement(self, ctx):
         lbl_start, lbl_end = self.loop_labels.pop()
@@ -1501,6 +1519,26 @@ class GeradorCodigo(LinguagemListener):
                 self.emit(f"{lbl_end}:\n")
                 self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
+    # -----------------------------------------------------------
+    # OPERADOR TERNÁRIO ( ? : )
+    # -----------------------------------------------------------
+    def enterConditionalExpression(self, ctx):
+        if ctx.QUESTION():
+            # Se tem '?', é um ternário. Criamos os labels.
+            lbl_false = self.get_next_label()
+            lbl_end = self.get_next_label()
+            
+            self.ternary_stack.append({
+                'lbl_false': lbl_false,
+                'lbl_end': lbl_end
+            })
+
+    def exitConditionalExpression(self, ctx):
+        if ctx.QUESTION():
+            # Finaliza o ternário colocando o label de FIM
+            config = self.ternary_stack.pop()
+            self.emit(f"{config['lbl_end']}:\n")
+
     # Operadores bitwise e lógicos (mantidos iguais)
     def exitBitwiseAndExpression(self, ctx):
         if ctx.B_AND():
@@ -1632,6 +1670,17 @@ class GeradorCodigo(LinguagemListener):
                 self.emit(f"   aload {idx_temp1}\n")
                 
                 self.emit(f"{lbl_end}:\n")
+        
+        parent = ctx.parentCtx
+        # Verifica se o pai é um ConditionalExpression (tem '?') e se nós somos a condição (primeiro filho)
+        if parent and hasattr(parent, 'QUESTION') and parent.QUESTION():
+            if parent.getChild(0) is ctx:
+                config = self.ternary_stack[-1]
+                
+                self.emit("   checkcast java/lang/Number\n")
+                self.emit("   invokevirtual java/lang/Number/intValue()I\n")
+                # Se a condição for falsa (0), pula para o bloco do ':', senão segue reto
+                self.emit(f"   ifeq {config['lbl_false']}\n")
 
     def exitArrayLiteral(self, ctx):
         self.emit("   new java/util/ArrayList\n")
