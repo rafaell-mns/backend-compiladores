@@ -509,36 +509,49 @@ class GeradorCodigo(LinguagemListener):
     # -----------------------------------------------------------
     def exitPostfixOp(self, ctx):
         # -----------------------------------------------------------
-        # 1. CHAMADAS DE FUNÇÃO
+        # 1. CHAMADAS DE FUNÇÃO (LPAREN)
         # -----------------------------------------------------------
         if ctx.LPAREN():
             parent = ctx.parentCtx
             texto_completo = parent.getText()
             
-            # --- CORREÇÃO: Math.pow (Desembrulha objetos para double primitivo) ---
-            if "Math.pow" in texto_completo:
-                # Pilha tem: [Base, Expoente] (Objetos Number)
-                # O topo é o Expoente. Precisamos inverter ou salvar em variáveis temporárias.
+            # --- CORREÇÃO 1: substring (Desembrulha objetos para int primitivo) ---
+            if ".substring" in texto_completo:
+                # A pilha contém: [String, Inicio, Fim] (Todos são Objetos)
                 
-                # 1. Trata o Expoente (Topo)
+                idx_fim = self.next_var_index + 10
+                idx_inicio = self.next_var_index + 11
+                
+                # 1. Desembrulha FIM (Topo)
+                self.emit("   checkcast java/lang/Number\n")
+                self.emit("   invokevirtual java/lang/Number/intValue()I\n") 
+                self.emit(f"   istore {idx_fim}\n")
+                
+                # 2. Desembrulha INICIO (Novo Topo)
+                self.emit("   checkcast java/lang/Number\n")
+                self.emit("   invokevirtual java/lang/Number/intValue()I\n") 
+                self.emit(f"   istore {idx_inicio}\n")
+                
+                # 3. Chama substring na String que sobrou
+                self.emit("   checkcast java/lang/String\n")
+                self.emit(f"   iload {idx_inicio}\n")
+                self.emit(f"   iload {idx_fim}\n")
+                self.emit("   invokevirtual java/lang/String/substring(II)Ljava/lang/String;\n")
+                return
+
+            # --- CORREÇÃO 2: Math.pow / sqrt ---
+            if "Math.pow" in texto_completo:
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                 idx_exp = self.next_var_index + 50
-                self.emit(f"   dstore {idx_exp}\n") # Tira da pilha e salva
-                
-                # 2. Trata a Base (Novo Topo)
+                self.emit(f"   dstore {idx_exp}\n") 
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-                
-                # 3. Recupera o Expoente
                 self.emit(f"   dload {idx_exp}\n")
-                
-                # 4. Chama a função (agora temos dois doubles na pilha)
                 self.emit("   invokestatic java/lang/Math/pow(DD)D\n")
                 self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                 return
 
-            # --- CORREÇÃO: Math.sqrt ---
             if "Math.sqrt" in texto_completo:
                 self.emit("   checkcast java/lang/Number\n")
                 self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
@@ -546,7 +559,12 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                 return
 
-            # ... (MANTENHA OS OUTROS BLOCOS: parseInt, parseFloat, substring IGUAIS) ...
+            if ".toUpperCase" in texto_completo:
+                self.emit("   checkcast java/lang/String\n")
+                self.emit("   invokevirtual java/lang/String/toUpperCase()Ljava/lang/String;\n")
+                return
+
+            # ... Outras funções (parseInt, etc) ...
             if "parseInt(" in texto_completo:
                 idx_temp = self.next_var_index + 80
                 lbl_is_number = self.get_next_label()
@@ -574,22 +592,6 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokestatic java/lang/Double/parseDouble(Ljava/lang/String;)D\n")
                 self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                 return
-            
-            if ".toUpperCase" in texto_completo:
-                self.emit("   checkcast java/lang/String\n")
-                self.emit("   invokevirtual java/lang/String/toUpperCase()Ljava/lang/String;\n")
-                return
-
-            if ".substring" in texto_completo:
-                idx_fim = self.next_var_index + 10
-                idx_inicio = self.next_var_index + 11
-                self.emit(f"   istore {idx_fim}\n")
-                self.emit(f"   istore {idx_inicio}\n")
-                self.emit("   checkcast java/lang/String\n")
-                self.emit(f"   iload {idx_inicio}\n")
-                self.emit(f"   iload {idx_fim}\n")
-                self.emit("   invokevirtual java/lang/String/substring(II)Ljava/lang/String;\n")
-                return
 
             # Funções Genéricas
             if hasattr(parent, 'primaryExpression'):
@@ -600,7 +602,7 @@ class GeradorCodigo(LinguagemListener):
             return
 
         # -----------------------------------------------------------
-        # 2. INCREMENTO / DECREMENTO (++ / --)
+        # 2. INCREMENTO / DECREMENTO
         # -----------------------------------------------------------
         op = None
         if ctx.INC(): op = 'inc'
@@ -629,17 +631,13 @@ class GeradorCodigo(LinguagemListener):
                         else:
                             # PÓS-INCREMENTO (x++): Retorna antigo, Salva novo
                             self.emit("   checkcast java/lang/Number\n")
-                            self.emit("   dup\n") # Duplica o Original (para retornar)
-                            
-                            # Calcula Novo
+                            self.emit("   dup\n") 
                             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                             self.emit("   dconst_1\n")
                             if op == 'inc': self.emit("   dadd\n")
                             else: self.emit("   dsub\n")
-                            
                             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
-                            self.emit(f"   astore {info['index']}\n") # Atualiza Variável
-                            # Original continua na pilha
+                            self.emit(f"   astore {info['index']}\n") 
             return
 
         # -----------------------------------------------------------
@@ -652,7 +650,16 @@ class GeradorCodigo(LinguagemListener):
 
             prop_name = ctx.Identifier().getText()
             is_optional = (ctx.OPTIONAL_CHAIN() is not None)
+
+            # === CORREÇÃO CRÍTICA AQUI ===
+            # Ignora métodos que já são tratados no bloco LPAREN acima.
+            # Se não ignorarmos, ele tenta tratar como propriedade de MAP e quebra String/Array.
+            metodos_nativos = ['substring', 'toUpperCase', 'toLowerCase', 'push', 'pop', 'length']
+            if prop_name in metodos_nativos:
+                return
+            # ==============================
             
+            # Lógica de Delete e Acesso a Map continua aqui
             parent = ctx.parentCtx
             is_last_op = False
             if hasattr(parent, 'postfixOp'):
@@ -661,6 +668,7 @@ class GeradorCodigo(LinguagemListener):
                     is_last_op = True
             
             if self.pending_delete and is_last_op:
+                # ... (MANTENHA A LÓGICA DE DELETE EXISTENTE) ...
                 if is_optional:
                     lbl_is_null = self.get_next_label()
                     lbl_end = self.get_next_label()

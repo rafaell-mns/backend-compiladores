@@ -14,9 +14,6 @@
    astore 1
    aload 1
    aload 1
-   checkcast java/util/Map
-   ldc "toUpperCase"
-   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2
    checkcast java/lang/String
    invokevirtual java/lang/String/toUpperCase()Ljava/lang/String;
    astore 1
@@ -25,14 +22,15 @@
    invokevirtual java/io/PrintStream/println(Ljava/lang/Object;)V
    aload 1
    aload 1
-   checkcast java/util/Map
-   ldc "substring"
-   invokeinterface java/util/Map/get(Ljava/lang/Object;)Ljava/lang/Object; 2
    iconst_0
    invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;
    iconst_4
    invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;
+   checkcast java/lang/Number
+   invokevirtual java/lang/Number/intValue()I
    istore 12
+   checkcast java/lang/Number
+   invokevirtual java/lang/Number/intValue()I
    istore 13
    checkcast java/lang/String
    iload 13
