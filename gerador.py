@@ -509,13 +509,44 @@ class GeradorCodigo(LinguagemListener):
     # -----------------------------------------------------------
     def exitPostfixOp(self, ctx):
         # -----------------------------------------------------------
-        # 1. CHAMADAS DE FUNÇÃO: parseInt, Math, substring, etc.
+        # 1. CHAMADAS DE FUNÇÃO
         # -----------------------------------------------------------
         if ctx.LPAREN():
             parent = ctx.parentCtx
             texto_completo = parent.getText()
             
-            # --- parseInt ---
+            # --- CORREÇÃO: Math.pow (Desembrulha objetos para double primitivo) ---
+            if "Math.pow" in texto_completo:
+                # Pilha tem: [Base, Expoente] (Objetos Number)
+                # O topo é o Expoente. Precisamos inverter ou salvar em variáveis temporárias.
+                
+                # 1. Trata o Expoente (Topo)
+                self.emit("   checkcast java/lang/Number\n")
+                self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
+                idx_exp = self.next_var_index + 50
+                self.emit(f"   dstore {idx_exp}\n") # Tira da pilha e salva
+                
+                # 2. Trata a Base (Novo Topo)
+                self.emit("   checkcast java/lang/Number\n")
+                self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
+                
+                # 3. Recupera o Expoente
+                self.emit(f"   dload {idx_exp}\n")
+                
+                # 4. Chama a função (agora temos dois doubles na pilha)
+                self.emit("   invokestatic java/lang/Math/pow(DD)D\n")
+                self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
+                return
+
+            # --- CORREÇÃO: Math.sqrt ---
+            if "Math.sqrt" in texto_completo:
+                self.emit("   checkcast java/lang/Number\n")
+                self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
+                self.emit("   invokestatic java/lang/Math/sqrt(D)D\n")
+                self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
+                return
+
+            # ... (MANTENHA OS OUTROS BLOCOS: parseInt, parseFloat, substring IGUAIS) ...
             if "parseInt(" in texto_completo:
                 idx_temp = self.next_var_index + 80
                 lbl_is_number = self.get_next_label()
@@ -538,34 +569,17 @@ class GeradorCodigo(LinguagemListener):
                 self.emit(f"{lbl_end}:\n")
                 return
 
-            # --- parseFloat ---
             if "parseFloat(" in texto_completo:
                 self.emit("   checkcast java/lang/String\n")
                 self.emit("   invokestatic java/lang/Double/parseDouble(Ljava/lang/String;)D\n")
                 self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                 return
-
-            # --- Math.pow ---
-            if "Math.pow" in texto_completo:
-                self.emit("   invokestatic java/lang/Math/pow(DD)D\n")
-                self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
-                return
-
-            # --- Math.sqrt ---
-            if "Math.sqrt" in texto_completo:
-                self.emit("   checkcast java/lang/Number\n")
-                self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-                self.emit("   invokestatic java/lang/Math/sqrt(D)D\n")
-                self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
-                return
             
-            # --- .toUpperCase ---
             if ".toUpperCase" in texto_completo:
                 self.emit("   checkcast java/lang/String\n")
                 self.emit("   invokevirtual java/lang/String/toUpperCase()Ljava/lang/String;\n")
                 return
 
-            # --- .substring ---
             if ".substring" in texto_completo:
                 idx_fim = self.next_var_index + 10
                 idx_inicio = self.next_var_index + 11
@@ -577,7 +591,7 @@ class GeradorCodigo(LinguagemListener):
                 self.emit("   invokevirtual java/lang/String/substring(II)Ljava/lang/String;\n")
                 return
 
-            # --- Funções do Usuário ---
+            # Funções Genéricas
             if hasattr(parent, 'primaryExpression'):
                 nome_funcao = parent.primaryExpression().getText()
                 ignorar = ['console', 'Math', 'parseInt', 'parseFloat', 'BigInt']
@@ -605,7 +619,6 @@ class GeradorCodigo(LinguagemListener):
                     
                     if info:
                         if self.capturing_increment:
-                            # Lógica para FOR loop (incremento simples)
                             self.emit("   checkcast java/lang/Number\n")
                             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                             self.emit("   dconst_1\n")
@@ -614,34 +627,19 @@ class GeradorCodigo(LinguagemListener):
                             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
                             self.emit(f"   astore {info['index']}\n")
                         else:
-                            # --- PÓS-INCREMENTO (x++) CORRIGIDO ---
-                            # O valor de 'x' já está na pilha (Ex: 6)
-                            
+                            # PÓS-INCREMENTO (x++): Retorna antigo, Salva novo
                             self.emit("   checkcast java/lang/Number\n")
+                            self.emit("   dup\n") # Duplica o Original (para retornar)
                             
-                            # 1. Duplica o valor original na pilha
-                            # Pilha: [Val_Antigo, Val_Antigo]
-                            self.emit("   dup\n") 
-                            
-                            # 2. Converte o topo para double para fazer a conta
-                            # Pilha: [Val_Antigo, double_Antigo]
+                            # Calcula Novo
                             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
-                            
-                            # 3. Adiciona/Subtrai 1
                             self.emit("   dconst_1\n")
                             if op == 'inc': self.emit("   dadd\n")
                             else: self.emit("   dsub\n")
-                            # Pilha: [Val_Antigo, double_Novo]
                             
-                            # 4. Empacota o novo valor (Ex: 7)
-                            # Pilha: [Val_Antigo, Objeto_Novo]
                             self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
-                            
-                            # 5. Salva o Objeto_Novo na variável x
-                            # O 'astore' consome o topo (Objeto_Novo), deixando o Val_Antigo na pilha
-                            self.emit(f"   astore {info['index']}\n")
-                            
-                            # Pilha final: [Val_Antigo] -> Isso é o que o console.log vai imprimir!
+                            self.emit(f"   astore {info['index']}\n") # Atualiza Variável
+                            # Original continua na pilha
             return
 
         # -----------------------------------------------------------
@@ -655,7 +653,6 @@ class GeradorCodigo(LinguagemListener):
             prop_name = ctx.Identifier().getText()
             is_optional = (ctx.OPTIONAL_CHAIN() is not None)
             
-            # Verifica se este é o último operador (para o delete)
             parent = ctx.parentCtx
             is_last_op = False
             if hasattr(parent, 'postfixOp'):
@@ -663,7 +660,6 @@ class GeradorCodigo(LinguagemListener):
                 if ops and ops[-1] is ctx:
                     is_last_op = True
             
-            # === CENÁRIO A: DELETE (delete obj.prop) ===
             if self.pending_delete and is_last_op:
                 if is_optional:
                     lbl_is_null = self.get_next_label()
@@ -692,7 +688,6 @@ class GeradorCodigo(LinguagemListener):
                 self.pending_delete = False 
                 return
 
-            # === CENÁRIO B: ACESSO NORMAL (GET) ===
             if is_optional:
                 lbl_is_null = self.get_next_label()
                 lbl_continue = self.get_next_label()
@@ -836,97 +831,62 @@ class GeradorCodigo(LinguagemListener):
     # CORREÇÃO: PRÉ-INCREMENTO (++x retorna NOVO valor)
     # -----------------------------------------------------------
     def exitUnaryExpression(self, ctx):
-        # --- IMPLEMENTAÇÃO DO DELETE ---
+        # --- DELETE ---
         if hasattr(ctx, 'DELETE') and ctx.DELETE():
-            # Se o delete já foi tratado no exitPostfixOp (removeu propriedade), 
-            # apenas reseta a flag, pois o "true" já está na pilha.
             if self.delete_handled:
                 self.delete_handled = False
                 self.pending_delete = False
                 return
-
-            # Caso contrário (ex: delete 42;), remove o valor e retorna true.
             self.emit("   pop\n")
             self.emit("   iconst_1\n")
             self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
-            
             self.pending_delete = False
             return
         
-        # --- IMPLEMENTAÇÃO DO TYPEOF ---
+        # --- TYPEOF ---
         if hasattr(ctx, 'TYPEOF') and ctx.TYPEOF():
+            # ... (MANTENHA O CÓDIGO DO TYPEOF QUE VOCÊ JÁ TINHA) ...
             idx_temp = self.next_var_index + 150
             lbl_num = self.get_next_label()
             lbl_str = self.get_next_label()
             lbl_bool = self.get_next_label()
-            lbl_list = self.get_next_label() # Array é object
-            lbl_map = self.get_next_label()  # Object é object
+            lbl_list = self.get_next_label() 
+            lbl_map = self.get_next_label() 
             lbl_end = self.get_next_label()
-
-            self.emit(f"   astore {idx_temp}\n") # Salva o valor do topo
-
-            # Verifica Number
+            self.emit(f"   astore {idx_temp}\n") 
             self.emit(f"   aload {idx_temp}\n")
             self.emit("   instanceof java/lang/Number\n")
             self.emit(f"   ifne {lbl_num}\n")
-
-            # Verifica String
             self.emit(f"   aload {idx_temp}\n")
             self.emit("   instanceof java/lang/String\n")
             self.emit(f"   ifne {lbl_str}\n")
-
-            # Verifica Boolean (Assumindo Integer 0 ou 1 como bool ou classe Boolean)
-            # Se você usa Integer 0/1 para bool, typeof retornará "number". 
-            # Se usa java/lang/Boolean:
             self.emit(f"   aload {idx_temp}\n")
             self.emit("   instanceof java/lang/Boolean\n")
             self.emit(f"   ifne {lbl_bool}\n")
-
-            # Verifica Objetos (List ou Map)
             self.emit(f"   aload {idx_temp}\n")
             self.emit("   instanceof java/util/List\n")
             self.emit(f"   ifne {lbl_list}\n")
             self.emit(f"   aload {idx_temp}\n")
             self.emit("   instanceof java/util/Map\n")
             self.emit(f"   ifne {lbl_map}\n")
-
-            # Default: undefined (se for null)
             self.emit('   ldc "undefined"\n')
             self.emit(f"   goto {lbl_end}\n")
-
             self.emit(f"{lbl_num}:\n")
             self.emit('   ldc "number"\n')
             self.emit(f"   goto {lbl_end}\n")
-
             self.emit(f"{lbl_str}:\n")
             self.emit('   ldc "string"\n')
             self.emit(f"   goto {lbl_end}\n")
-            
             self.emit(f"{lbl_bool}:\n")
             self.emit('   ldc "boolean"\n')
             self.emit(f"   goto {lbl_end}\n")
-
             self.emit(f"{lbl_list}:\n")
             self.emit(f"{lbl_map}:\n")
-            self.emit('   ldc "object"\n') # Arrays e Maps são objects em JS
-
+            self.emit('   ldc "object"\n')
             self.emit(f"{lbl_end}:\n")
             return
 
-        # --- IMPLEMENTAÇÃO DO DELETE ---
-        # Nota: Delete real em compiladores requer acesso à referência (L-Value).
-        # Esta implementação assume que o comando anterior colocou o MAP e a CHAVE na pilha.
-        # Ex: delete obj["idade"] -> Se o parser tratar isso como uma operação binária, ok.
-        # Se for unário simples, geralmente apenas retorna true sem efeito em implementações simples.
-        if hasattr(ctx, 'DELETE') and ctx.DELETE():
-            # Remove o valor do topo da pilha (fingindo que deletou)
-            self.emit("   pop\n")
-            # Retorna true (delete sempre retorna true em JS, exceto frozen)
-            self.emit("   iconst_1\n")
-            self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
-            return
-        
-        # --- CORREÇÃO: PRÉ-INCREMENTO / DECREMENTO (++x / --x) ---
+        # --- PRÉ-INCREMENTO / DECREMENTO (++x / --x) ---
         if ctx.INC() or ctx.DEC():
             primeiro = ctx.getChild(1)
             if hasattr(primeiro, 'getText'):
@@ -937,41 +897,28 @@ class GeradorCodigo(LinguagemListener):
                     info = self.var_map_main.get(nome)
                 
                 if info:
-                    # CORREÇÃO CRÍTICA: O valor da variável JÁ ESTÁ NA PILHA
-                    # (colocado pelo enterPrimaryExpression do filho).
-                    # Não fazemos 'aload' aqui para não duplicar.
-                    
+                    # O valor já está na pilha (posto pelo enterPrimaryExpression).
                     self.emit("   checkcast java/lang/Number\n")
                     self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
                     self.emit("   dconst_1\n")
+                    if ctx.INC(): self.emit("   dadd\n")
+                    else: self.emit("   dsub\n")
                     
-                    if ctx.INC():
-                        self.emit("   dadd\n") # Soma 1
-                    else:
-                        self.emit("   dsub\n") # Subtrai 1
-                    
-                    # Empacota o novo valor em Double
                     self.emit("   invokestatic java/lang/Double/valueOf(D)Ljava/lang/Double;\n")
-                    
-                    # Agora temos [NovoValor] na pilha.
-                    # Precisamos salvar na variável E deixar o valor na pilha para o console.log usar.
-                    
-                    self.emit("   dup\n") # Pilha: [NovoValor, NovoValor]
-                    self.emit(f"   astore {info['index']}\n") # Salva um na variável. Pilha: [NovoValor]
+                    self.emit("   dup\n") # Duplica: um pra variável, um pra pilha de retorno
+                    self.emit(f"   astore {info['index']}\n")
             return
 
-        # --- CORREÇÃO: TILDE (~) ---
-        # A lógica antiga do Tilde também tinha esse problema de 'aload' duplicado
-        # e só funcionava para variáveis. Vamos fazer funcionar para qualquer expressão.
+        # --- TILDE (~) ---
         elif ctx.TILDE():
-            # O valor da expressão (seja variável ou número) já está na pilha.
             self.emit("   checkcast java/lang/Number\n")
             self.emit("   invokevirtual java/lang/Number/intValue()I\n")
-            self.emit("   iconst_m1\n") # Carrega -1 (que é a máscara de inversão bitwise total)
-            self.emit("   ixor\n")      # XOR com -1 inverte todos os bits (equivalente a ~)
+            self.emit("   iconst_m1\n")
+            self.emit("   ixor\n")
             self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
             return
         
+        # --- OUTROS UNÁRIOS (-, !) ---
         if ctx.MINUS():
             self.emit("   checkcast java/lang/Number\n")
             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
@@ -984,29 +931,23 @@ class GeradorCodigo(LinguagemListener):
             lbl_true = self.get_next_label()
             lbl_false = self.get_next_label()
             lbl_end = self.get_next_label()
-            
             self.emit(f"   astore {idx_temp}\n")
             self.emit(f"   aload {idx_temp}\n")
             self.emit(f"   ifnull {lbl_true}\n")
-            
             self.emit(f"   aload {idx_temp}\n")
             self.emit("   instanceof java/lang/Number\n")
             self.emit(f"   ifeq {lbl_false}\n")
-            
             self.emit(f"   aload {idx_temp}\n")
             self.emit("   checkcast java/lang/Number\n")
             self.emit("   invokevirtual java/lang/Number/doubleValue()D\n")
             self.emit("   dconst_0\n")
             self.emit("   dcmpl\n")
             self.emit(f"   ifeq {lbl_true}\n")
-            
             self.emit(f"{lbl_false}:\n")
             self.emit("   iconst_0\n")
             self.emit(f"   goto {lbl_end}\n")
-            
             self.emit(f"{lbl_true}:\n")
             self.emit("   iconst_1\n")
-            
             self.emit(f"{lbl_end}:\n")
             self.emit("   invokestatic java/lang/Integer/valueOf(I)Ljava/lang/Integer;\n")
 
